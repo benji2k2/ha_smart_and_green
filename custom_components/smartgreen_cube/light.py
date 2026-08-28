@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import colorsys
 import logging
 from typing import Any
 
@@ -10,12 +11,13 @@ from bleak_retry_connector import BleakClientWithServiceCache, establish_connect
 from homeassistant.components import bluetooth
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
-    ATTR_HS_COLOR,
+    ATTR_RGBW_COLOR,
     ColorMode,
     LightEntity,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -39,33 +41,40 @@ _LOGGER = logging.getLogger(__name__)
 
 # Ein Lock pro BLE-Adresse — verhindert parallele Verbindungen zum selben Gerät.
 _LOCKS: dict[str, asyncio.Lock] = {}
+# Einmal aufgelöste BLE-Adressen; Cubes werben nach dem Verbinden nicht dauerhaft.
+_MAC_CACHE: dict[str, str] = {}
 
 
 def _lock_for(mac: str) -> asyncio.Lock:
     return _LOCKS.setdefault(mac, asyncio.Lock())
 
 
-def _lmp_frag(lmp: str) -> str:
-    """'13:40' -> '1340' (wie im Advertising-Namen 'Bulb1340')."""
-    return lmp.replace(":", "").lower()
+def _adv_name_for(lmp: str) -> str:
+    """'13:40' -> 'bulb1340' (Advertising-Name der Cubes)."""
+    return "bulb" + lmp.replace(":", "").lower()
 
 
 def _resolve_mac(hass: HomeAssistant, lmp: str) -> str | None:
-    """Findet die BLE-Adresse eines Moduls anhand von Adv-Name / Hersteller-Daten."""
-    want_name = "bulb" + _lmp_frag(lmp)
+    """BLE-Adresse eines Moduls über Adv-Name / Hersteller-Daten finden."""
+    if (cached := _MAC_CACHE.get(lmp)) is not None:
+        return cached
+
+    want_name = _adv_name_for(lmp)
     for si in bluetooth.async_discovered_service_info(hass, connectable=True):
-        if (si.name or "").lower() == want_name:
+        match = (si.name or "").lower() == want_name
+        if not match:
+            md = si.manufacturer_data.get(COMPANY_ID)
+            if md and len(md) >= 4:
+                match = "%02X:%02X" % (md[3], md[2]) == lmp.upper()
+        if match:
+            _MAC_CACHE[lmp] = si.address
+            _LOGGER.debug("Cube %s -> BLE-Adresse %s", lmp, si.address)
             return si.address
-        md = si.manufacturer_data.get(COMPANY_ID)
-        if md and len(md) >= 4:
-            src = "%02X:%02X" % (md[3], md[2])
-            if src.upper() == lmp.upper():
-                return si.address
     return None
 
 
 def _discover_modules(hass: HomeAssistant) -> list[dict]:
-    """Baut die Modulliste rein aus BLE-Advertisements (Fallback ohne .lap)."""
+    """Modulliste rein aus BLE-Advertisements (Fallback ohne .lap)."""
     seen: dict[str, dict] = {}
     for si in bluetooth.async_discovered_service_info(hass, connectable=True):
         md = si.manufacturer_data.get(COMPANY_ID)
@@ -115,11 +124,16 @@ async def async_setup_entry(
 
 
 class SmartGreenCubeLight(LightEntity):
-    """Eine Cube-Leuchte (oder die Gruppe 'Alle')."""
+    """Eine Cube-Leuchte (oder die Gruppe 'Alle').
+
+    Die Cubes sind RGBW: farbige LEDs plus separater (warm-)weißer Kanal.
+    Deshalb ``ColorMode.RGBW`` — Home Assistant liefert damit ``rgbw_color``
+    inklusive eigenem Weiß-Wert, den das LMP-Payload direkt aufnimmt.
+    """
 
     _attr_has_entity_name = False
-    _attr_color_mode = ColorMode.HS
-    _attr_supported_color_modes = {ColorMode.HS}
+    _attr_color_mode = ColorMode.RGBW
+    _attr_supported_color_modes = {ColorMode.RGBW}
     _attr_assumed_state = True
     _attr_should_poll = False
 
@@ -147,10 +161,10 @@ class SmartGreenCubeLight(LightEntity):
         suffix = f"group_{self._lmp}" if is_group else self._lmp
         self._attr_unique_id = f"{entry.entry_id}_{suffix}"
 
-        # Optimistischer Startzustand
+        # Optimistischer Startzustand: warmweiß, volle Helligkeit.
         self._attr_is_on = False
         self._attr_brightness = 255
-        self._attr_hs_color = (0.0, 0.0)
+        self._attr_rgbw_color = (0, 0, 0, 255)
 
         if not is_group:
             self._attr_device_info = DeviceInfo(
@@ -164,59 +178,113 @@ class SmartGreenCubeLight(LightEntity):
         self._cmd_id = (self._cmd_id + 1) % 256
         return self._cmd_id or 1
 
-    async def _gateway_mac(self) -> str | None:
-        if self._is_group:
-            for lmp in self._members:
-                mac = _resolve_mac(self.hass, lmp)
-                if mac:
-                    return mac
-            return None
-        return _resolve_mac(self.hass, self._lmp)
+    def _target_lmps(self) -> list[str]:
+        """LMP-Adressen, über die dieses Entity erreichbar ist."""
+        return self._members if self._is_group else [self._lmp]
 
-    async def _send(self, onoff: bool, h: float, s: float, v: float) -> None:
-        mac = await self._gateway_mac()
-        if mac is None:
-            _LOGGER.warning("Cube %s aktuell nicht per BLE erreichbar", self._lmp)
-            raise RuntimeError(f"Cube {self._lmp} nicht erreichbar")
+    def _build_frame(self) -> bytes:
+        """Baut das LMP-Frame aus dem aktuellen (gewünschten) Zustand."""
+        r, g, b, w = self._attr_rgbw_color or (0, 0, 0, 255)
+        bri = self._attr_brightness if self._attr_brightness is not None else 255
+        scale = bri / 255.0
+
+        h_f, _l, _s_hls = colorsys.rgb_to_hls(r / 255.0, g / 255.0, b / 255.0)
+        h = h_f * 360.0
+        # Sättigung/Helligkeit im HSV-Sinn (die App rechnet mit HSV).
+        mx = max(r, g, b) / 255.0
+        mn = min(r, g, b) / 255.0
+        s = 0.0 if mx == 0 else (mx - mn) / mx * 100.0
+        v = mx * 100.0 * scale
+        white = (w / 255.0) * 100.0 * scale
+
+        # Die App kennt COLOR_MODE (0) und WHITE_MODE (1) exklusiv. Überwiegt
+        # der Weiß-Kanal, senden wir im Weiß-Modus (Flag 0x80 im Weiß-Byte),
+        # sonst als Farbe.
+        white_mode = w >= max(r, g, b)
+        if white_mode:
+            s = 0.0
+            v = 0.0
 
         payload = build_color_payload(
-            self._index, onoff, h, s, v,
+            self._index, self._attr_is_on, h, s, v,
             is_group=self._is_group, class_id=self._class,
+            white=white, white_mode=white_mode,
         )
-        frame = build_frame(self._lmp, payload, self._key, self._nonce,
-                            cmd_id=self._next_cmd_id())
+        return build_frame(self._lmp, payload, self._key, self._nonce,
+                           cmd_id=self._next_cmd_id())
 
+    async def _write(self, mac: str, frame: bytes) -> None:
         async with _lock_for(mac):
             ble_device = bluetooth.async_ble_device_from_address(
                 self.hass, mac, connectable=True
             )
             if ble_device is None:
-                raise RuntimeError(f"BLE-Gerät {mac} nicht verfügbar")
+                raise RuntimeError(f"BLE-Gerät {mac} derzeit nicht verfügbar")
             client = await establish_connection(
                 BleakClientWithServiceCache, ble_device, self._attr_name
             )
             try:
-                try:
-                    await client.write_gatt_char(CHAR_UUID, frame, response=False)
-                except Exception:  # noqa: BLE001 - manche Proxys wollen "with response"
-                    await client.write_gatt_char(CHAR_UUID, frame, response=True)
+                # Zweimal senden: Mesh-Knoten verschlucken den ersten Write
+                # direkt nach dem Verbindungsaufbau gelegentlich.
+                for attempt in range(2):
+                    try:
+                        await client.write_gatt_char(CHAR_UUID, frame, response=False)
+                    except Exception:  # noqa: BLE001 — manche Proxys wollen "with response"
+                        await client.write_gatt_char(CHAR_UUID, frame, response=True)
+                    if attempt == 0:
+                        await asyncio.sleep(0.12)
             finally:
                 await client.disconnect()
+
+    async def _send(self) -> None:
+        """Sendet den aktuellen Zustand; probiert alle erreichbaren Module."""
+        frame = self._build_frame()
+        _LOGGER.debug("%s: sende %s", self._attr_name, frame.hex(" "))
+
+        last_err: Exception | None = None
+        for lmp in self._target_lmps():
+            mac = _resolve_mac(self.hass, lmp)
+            if mac is None:
+                _LOGGER.debug("%s: keine BLE-Adresse für %s bekannt", self._attr_name, lmp)
+                continue
+            try:
+                await self._write(mac, frame)
+                return
+            except Exception as err:  # noqa: BLE001
+                last_err = err
+                # Adresse könnte veraltet sein -> Cache verwerfen und neu suchen.
+                _MAC_CACHE.pop(lmp, None)
+                _LOGGER.debug("%s: Senden über %s fehlgeschlagen: %s",
+                              self._attr_name, mac, err)
+                if (mac2 := _resolve_mac(self.hass, lmp)) and mac2 != mac:
+                    try:
+                        await self._write(mac2, frame)
+                        return
+                    except Exception as err2:  # noqa: BLE001
+                        last_err = err2
+                        _MAC_CACHE.pop(lmp, None)
+
+        if last_err is not None:
+            raise HomeAssistantError(
+                f"{self._attr_name}: Befehl konnte nicht gesendet werden ({last_err})"
+            ) from last_err
+        raise HomeAssistantError(
+            f"{self._attr_name}: Cube derzeit nicht per Bluetooth erreichbar. "
+            "Ist ein Bluetooth-Proxy in Reichweite?"
+        )
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         if ATTR_BRIGHTNESS in kwargs:
             self._attr_brightness = kwargs[ATTR_BRIGHTNESS]
-        if ATTR_HS_COLOR in kwargs:
-            self._attr_hs_color = kwargs[ATTR_HS_COLOR]
-        h, s = self._attr_hs_color
-        v = max(1, round((self._attr_brightness or 255) / 255 * 100))
-        await self._send(True, h, s, v)
+        if ATTR_RGBW_COLOR in kwargs:
+            self._attr_rgbw_color = kwargs[ATTR_RGBW_COLOR]
+        if not self._attr_brightness:
+            self._attr_brightness = 255
         self._attr_is_on = True
+        await self._send()
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        h, s = self._attr_hs_color
-        v = max(1, round((self._attr_brightness or 255) / 255 * 100))
-        await self._send(False, h, s, v)
         self._attr_is_on = False
+        await self._send()
         self.async_write_ha_state()

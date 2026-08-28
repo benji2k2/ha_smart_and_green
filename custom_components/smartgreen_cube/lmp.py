@@ -46,9 +46,24 @@ def _process_color(h: float, s: float, v: float) -> dict:
 
 
 def build_color_payload(index: int, onoff: bool, h: float, s: float, v: float,
-                        is_group: bool = False, class_id: int = 19) -> list[int]:
-    """RGBW-Payload wie cmdFactory.build_color_control (API>=2)."""
+                        is_group: bool = False, class_id: int = 19,
+                        white: float | None = None,
+                        white_mode: bool = False) -> list[int]:
+    """RGBW-Payload wie cmdFactory.build_color_control (API>=2).
+
+    ``white`` (0..100) überschreibt den aus der Sättigung abgeleiteten
+    Weiß-Wert der App — nötig, wenn Home Assistant den Weiß-Kanal (RGBW)
+    explizit vorgibt.
+
+    ``white_mode`` entspricht ``color_mode != COLOR_MODE`` in der App: dort
+    wird der Weiß-Wert ab API 2 um ``0x80`` erhöht — dieses Bit schaltet den
+    weißen Kanal aktiv. Ohne das Flag ignoriert die Leuchte reines Weiß.
+    """
     pc = _process_color(h, s, v)
+    if white is not None:
+        pc["white"] = max(0.0, min(100.0, white))
+    if white_mode:
+        pc["white"] = min(100.0, pc["white"]) + 0x80
     op = _OP_GROUP_DATA_SET if is_group else _OP_DEVICE_DATA_SET
     idx = class_id if is_group else index
     b = [
