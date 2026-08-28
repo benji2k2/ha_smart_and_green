@@ -39,12 +39,11 @@ from .lmp import build_color_payload, build_frame, temp_to_hs
 
 _LOGGER = logging.getLogger(__name__)
 
-# Verbindung nach dieser Zeit ohne Befehl schließen. Kurz gewählt: das
-# zuverlässig funktionierende Testskript trennt nach jedem Durchlauf, und eine
-# lange offen gehaltene Verbindung wurde beobachtet als "geht an, danach nichts
-# mehr". Die knappe Spanne fasst nur schnelle Folgebefehle zusammen
-# (z. B. Ziehen am Farb-/Helligkeitsregler).
-IDLE_DISCONNECT = 2.0
+# Verbindung nach dieser Zeit ohne Befehl schließen. Ein Verbindungsaufbau über
+# einen ESPHome-Proxy dauert spürbar, deshalb halten wir sie offen — im Feldtest
+# hat sich das als zuverlässig erwiesen. Folgebefehle (Farb-/Helligkeitsregler)
+# laufen so ohne erneuten Verbindungsaufbau.
+IDLE_DISCONNECT = 20.0
 
 _LOCKS: dict[str, asyncio.Lock] = {}
 _CLIENTS: dict[str, Any] = {}
