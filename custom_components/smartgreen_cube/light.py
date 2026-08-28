@@ -51,6 +51,12 @@ IDLE_DISCONNECT = 20.0
 DEVICE_WAIT_TRIES = 6      # Versuche, ein verbindbares Gerät zu bekommen
 DEVICE_WAIT_DELAY = 1.5    # Sekunden zwischen den Versuchen
 CONNECT_ATTEMPTS = 5       # Verbindungsversuche von bleak-retry-connector
+SEND_ATTEMPTS = 3          # komplette Anläufe (inkl. Neuverbinden) pro Befehl
+RETRY_BACKOFF = 0.4        # Sekunden Pause zwischen den Anläufen
+
+# Ab dieser Signalstärke wird der Link unzuverlässig: die Verbindung kommt oft
+# noch zustande, bricht dann aber während der Service-Discovery ab.
+WEAK_RSSI = -75
 
 _LOCKS: dict[str, asyncio.Lock] = {}
 _CLIENTS: dict[str, Any] = {}
@@ -305,6 +311,26 @@ class SmartGreenCubeLight(LightEntity):
 
         _schedule_idle_disconnect(mac)
 
+    def _log_link_quality(self, mac: str) -> None:
+        """Protokolliert die Signalstärke und warnt bei schwachem Link.
+
+        Ein Cube am Rand der Reichweite verbindet sich zwar noch, bricht aber
+        gern mitten in der Service-Discovery oder beim Schreiben ab. Das sieht
+        nach einem sporadischen Softwarefehler aus, ist aber Funkreichweite —
+        deshalb steht der Wert im Log, statt dass man ihn suchen muss.
+        """
+        info = bluetooth.async_last_service_info(self.hass, mac, connectable=True)
+        if info is None:
+            return
+        if info.rssi <= WEAK_RSSI:
+            _LOGGER.warning(
+                "%s: schwaches Signal (%d dBm über %s). Unter %d dBm brechen "
+                "Verbindungen häufig ab — einen Bluetooth-Proxy näher stellen.",
+                self._attr_name, info.rssi, info.source, WEAK_RSSI)
+        else:
+            _LOGGER.debug("%s: Signal %d dBm über %s",
+                          self._attr_name, info.rssi, info.source)
+
     async def _send(self) -> None:
         """Sendet den aktuellen Zustand; probiert alle erreichbaren Module."""
         frame = self._build_frame()
@@ -317,8 +343,9 @@ class SmartGreenCubeLight(LightEntity):
                 _LOGGER.warning("%s: keine BLE-Adresse für %s gefunden",
                                 self._attr_name, lmp)
                 continue
+            self._log_link_quality(mac)
             async with _lock_for(mac):
-                for attempt in (1, 2):
+                for attempt in range(1, SEND_ATTEMPTS + 1):
                     try:
                         await self._write_once(mac, frame)
                         _LOGGER.debug("%s: Frame gesendet (Versuch %d, %s)",
@@ -326,13 +353,16 @@ class SmartGreenCubeLight(LightEntity):
                         return
                     except Exception as err:  # noqa: BLE001
                         last_err = err
-                        _LOGGER.warning("%s: Versuch %d über %s fehlgeschlagen: %s",
-                                        self._attr_name, attempt, mac, err)
+                        _LOGGER.warning("%s: Versuch %d/%d über %s fehlgeschlagen: %s",
+                                        self._attr_name, attempt, SEND_ATTEMPTS,
+                                        mac, err)
                         await _drop_client(mac)
                         if attempt == 1:
                             _MAC_CACHE.pop(lmp, None)
                             if (mac2 := _resolve_mac(self.hass, lmp)) and mac2 != mac:
                                 mac = mac2
+                        if attempt < SEND_ATTEMPTS:
+                            await asyncio.sleep(RETRY_BACKOFF)
 
         if last_err is not None:
             raise HomeAssistantError(
