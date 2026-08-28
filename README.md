@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="brands/icon.png" width="128" alt="Smart & Green Cube" />
+  <img src="custom_components/smartgreen_cube/brand/icon.png" width="128" alt="Smart & Green Cube" />
 </p>
 
 <h1 align="center">Smart &amp; Green Cube — Home Assistant Integration</h1>
@@ -90,10 +90,9 @@ in dieses Repository committed (siehe `.gitignore`).
 
 ## Icons
 
-Das Integrations-Icon (`brands/icon.png`, `brands/icon@2x.png`) wird für die
-Anzeige in der HA-Oberfläche beim Projekt
-[home-assistant/brands](https://github.com/home-assistant/brands) unter
-`custom_integrations/smartgreen_cube/` eingereicht.
+Das Integrations-Icon liegt im Repo unter
+`custom_components/smartgreen_cube/brand/` (`icon.png` 256px, `icon@2x.png` 512px,
+`logo.png`). Das Motiv ist das Herstellerlogo aus der Original-App.
 
 ## Lizenz
 
