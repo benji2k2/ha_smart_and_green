@@ -39,10 +39,12 @@ from .lmp import build_color_payload, build_frame, temp_to_hs
 
 _LOGGER = logging.getLogger(__name__)
 
-# Verbindung nach dieser Zeit ohne Befehl schließen. Ein Verbindungsaufbau über
-# einen ESPHome-Proxy dauert spürbar — deshalb halten wir sie kurz offen, statt
-# pro Befehl neu zu verbinden (so macht es auch das funktionierende Testskript).
-IDLE_DISCONNECT = 25.0
+# Verbindung nach dieser Zeit ohne Befehl schließen. Kurz gewählt: das
+# zuverlässig funktionierende Testskript trennt nach jedem Durchlauf, und eine
+# lange offen gehaltene Verbindung wurde beobachtet als "geht an, danach nichts
+# mehr". Die knappe Spanne fasst nur schnelle Folgebefehle zusammen
+# (z. B. Ziehen am Farb-/Helligkeitsregler).
+IDLE_DISCONNECT = 2.0
 
 _LOCKS: dict[str, asyncio.Lock] = {}
 _CLIENTS: dict[str, Any] = {}
@@ -277,17 +279,20 @@ class SmartGreenCubeLight(LightEntity):
         for lmp in self._target_lmps():
             mac = _resolve_mac(self.hass, lmp)
             if mac is None:
-                _LOGGER.debug("%s: keine BLE-Adresse für %s", self._attr_name, lmp)
+                _LOGGER.warning("%s: keine BLE-Adresse für %s gefunden",
+                                self._attr_name, lmp)
                 continue
             async with _lock_for(mac):
                 for attempt in (1, 2):
                     try:
                         await self._write_once(mac, frame)
+                        _LOGGER.debug("%s: Frame gesendet (Versuch %d, %s)",
+                                      self._attr_name, attempt, mac)
                         return
                     except Exception as err:  # noqa: BLE001
                         last_err = err
-                        _LOGGER.debug("%s: Versuch %d über %s fehlgeschlagen: %s",
-                                      self._attr_name, attempt, mac, err)
+                        _LOGGER.warning("%s: Versuch %d über %s fehlgeschlagen: %s",
+                                        self._attr_name, attempt, mac, err)
                         await _drop_client(mac)
                         if attempt == 1:
                             _MAC_CACHE.pop(lmp, None)
