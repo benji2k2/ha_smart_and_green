@@ -84,9 +84,26 @@ Gruppen-Broadcast) profitiert noch von Feld-Tests. Der Zustand ist derzeit
 
 ## Sicherheit / Datenschutz
 
-Die `.lap`-Datei und die extrahierten Schlüssel sind **Geheimnisse deiner
-Installation**. Sie werden nur lokal in der Config-Entry gespeichert und **nie**
-in dieses Repository committed (siehe `.gitignore`).
+Die `.lap`-Datei und der extrahierte Schlüssel (`keyCrypt1` + `nonce`) sind
+**Geheimnisse deiner Installation**. Sie werden **nie** in dieses Repository
+committed (siehe `.gitignore`).
+
+**Speicherung in Home Assistant:** Der Schlüssel wird – wie alle
+Integrations-Geheimnisse in HA (WLAN-Passwörter, Tokens, API-Keys) – in der
+Config-Entry unter `<config>/.storage/core.config_entries` als **Klartext-JSON**
+abgelegt. Home Assistant verschlüsselt diese Daten **nicht** at-rest; das
+Bedrohungsmodell setzt einen vertrauenswürdigen Host voraus.
+
+Praktisch bedeutet das:
+
+- Wer Dateisystem-Zugriff auf den HA-Host hat, kann den Schlüssel lesen.
+- Der Schlüssel landet in **Backups** – aktiviere daher **verschlüsselte Backups**.
+- Der Schlüssel wird nie geloggt und in **Diagnose-Downloads maskiert**
+  (`diagnostics.py`).
+
+Einordnung: Es handelt sich um ein **lokales BLE-Steuergeheimnis** – missbrauchbar
+nur in Funkreichweite bzw. über dein Proxy-Netz, nicht als Cloud-Zugang. Derselbe
+Schlüssel liegt ohnehin bereits im App-Export, auf dem Smartphone und in den Cubes.
 
 ## Icons
 
