@@ -281,17 +281,25 @@ class SmartGreenCubeLight(LightEntity):
             _CLIENTS[mac] = client
             fresh = True
 
-        try:
-            await client.write_gatt_char(CHAR_UUID, frame, response=False)
-        except Exception:  # noqa: BLE001 — manche Proxys wollen "with response"
-            await client.write_gatt_char(CHAR_UUID, frame, response=True)
+        # "Write without response" ist fire-and-forget: der Proxy quittiert den
+        # Aufruf sofort, auch wenn das Frame den Cube nie erreicht — ein Fehler
+        # bleibt dann unsichtbar und wir melden faelschlich Erfolg. Wo die
+        # Characteristic quittierte Writes unterstuetzt, nutzen wir die.
+        char = client.services.get_characteristic(CHAR_UUID)
+        acked = char is not None and "write" in getattr(char, "properties", ())
+        target = char if char is not None else CHAR_UUID
+        if fresh:
+            _LOGGER.debug("%s: Write-Modus %s", self._attr_name,
+                          "mit Quittung" if acked else "ohne Quittung")
+
+        await client.write_gatt_char(target, frame, response=acked)
 
         # Direkt nach einem frischen Verbindungsaufbau verschluckt das Modul
         # den ersten Write gelegentlich — dann einmal nachlegen.
         if fresh:
             await asyncio.sleep(0.12)
             try:
-                await client.write_gatt_char(CHAR_UUID, frame, response=False)
+                await client.write_gatt_char(target, frame, response=acked)
             except Exception:  # noqa: BLE001
                 pass
 
