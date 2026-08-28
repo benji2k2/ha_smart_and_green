@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Geheimnisse – niemals committen!
+*.lap
+lnk.SandG.conf.txt
+conf/
+decoded_config.md
+.env
+
+# OS
+.DS_Store

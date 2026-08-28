@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Smart & Green Cube",
+        "description": "How would you like to provide the mesh keys?",
+        "menu_options": {
+          "import_lap": "Import configuration file (.lap)",
+          "manual": "Enter keys manually"
+        }
+      },
+      "import_lap": {
+        "title": "Import configuration",
+        "description": "Export the configuration in the Smart & Green app (creates a password-protected .lap file), then upload it here.",
+        "data": {
+          "file": "Configuration file (.lap)",
+          "password": "Export password"
+        }
+      },
+      "manual": {
+        "title": "Enter keys manually",
+        "description": "Enter the private key (keyCrypt1) and nonce (nounceAESCrypt) as 16-byte hex.",
+        "data": {
+          "key_crypt1": "Private key (16 bytes hex)",
+          "nonce": "Nonce (16 bytes hex)"
+        }
+      }
+    },
+    "error": {
+      "wrong_password": "Wrong password for the configuration file.",
+      "invalid_file": "The file could not be read as a Smart & Green configuration.",
+      "no_modules": "No cubes found in the configuration.",
+      "invalid_hex": "Key and nonce must each be 16 bytes of hex."
+    },
+    "abort": {
+      "already_configured": "Smart & Green Cube is already set up."
+    }
+  }
+}
