@@ -96,6 +96,27 @@ def build_color_payload(index, onoff, h, s, v):
     return b
 
 
+def build_white_payload(index, onoff, level=100, flag=True):
+    """Weiß-Modus: V=0, Weiß-Byte traegt (optional) das 0x80-Flag (WHITE_MODE)."""
+    white = int(max(0, min(100, level)))
+    if flag:
+        white += 0x80
+    b = [
+        0,
+        OP_DEVICE_DATA_SET,
+        index & 0xFF,
+        (1 if onoff else 0) + (LED_MODE_COLOR << 4),
+        0,                                      # V = 0 (Farb-LEDs aus)
+        0, 0,                                   # H
+        0,                                      # S = 0
+        FADE_COLOR_TRANSITION & 0xFF,
+        (FADE_COLOR_TRANSITION >> 8) & 0xFF,
+        white & 0xFF,                           # Weiss-Byte (+0x80 = WHITE_MODE)
+    ]
+    b[0] = len(b) - 1
+    return b
+
+
 def build_group_color_payload(class_id, onoff, h, s, v):
     p = build_color_payload(class_id, onoff, h, s, v)
     p[1] = OP_GROUP_DATA_SET                      # 0x56 statt 0x41
@@ -272,7 +293,13 @@ async def dump_gatt(dev):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("action", choices=["scan", "scanall", "gatt", "redtest", "on", "off"])
+    ap.add_argument("action",
+                    choices=["scan", "scanall", "gatt", "redtest", "whitetest",
+                             "sweep", "on", "off"])
+    ap.add_argument("--gap", action="store_true",
+                    help="zwischen den Schritten ausschalten (statt direktem Wechsel)")
+    ap.add_argument("--hold", type=float, default=3.0,
+                    help="Sekunden pro Schritt (Standard 3)")
     ap.add_argument("--small", action="store_true", help="CubeSmall statt CubeLarge")
     ap.add_argument("--group", action="store_true", help="an Gruppe 'Alle' (FF:FF)")
     ap.add_argument("--h", type=float, default=285)
@@ -327,7 +354,51 @@ def main():
           + ("  (als GRUPPE)" if args.group else ""))
 
     frames = []
-    if args.action == "redtest":
+    if args.action == "sweep":
+        # (Label, H, S, V) — Weiss laeuft in der App ueber den FARBWEG:
+        # niedrige Saettigung => hoher Weiss-Kanal (kalt),
+        # warmer Ton mit hoher Saettigung => orange LEDs (warm).
+        steps = [
+            ("Warmweiss ~2200K (h30 s85)", 30, 85, 100),
+            ("Neutralweiss  (h30 s40)",    30, 40, 100),
+            ("Kaltweiss     (s0)",          0,  0, 100),
+            ("ROT",                         0, 100, 100),
+            ("GRUEN",                     120, 100, 100),
+            ("BLAU",                      240, 100, 100),
+            ("Rot 30% gedimmt",             0, 100,  30),
+        ]
+        cid = 0
+        for label, h, s, v in steps:
+            cid += 1
+            pl = build_color_payload(dev_index, True, h, s, v)
+            frames.append((f"{label}  payload={pl[4]},{pl[7]},w={pl[10]}",
+                           build_frame(target_lmp, pl, key1, nonce, cmd_id=cid),
+                           args.hold))
+            if args.gap:
+                cid += 1
+                frames.append(("  -> aus",
+                               build_frame(target_lmp,
+                                           build_color_payload(dev_index, False, h, s, v),
+                                           key1, nonce, cmd_id=cid), 1.2))
+        cid += 1
+        frames.append(("AUS (Ende)",
+                       build_frame(target_lmp,
+                                   build_color_payload(dev_index, False, 0, 0, 100),
+                                   key1, nonce, cmd_id=cid), 0.5))
+    elif args.action == "whitetest":
+        # A: Weiß MIT 0x80-Flag (WHITE_MODE) — Theorie
+        frames.append(("WEISS mit 0x80-Flag",
+                       build_frame(target_lmp, build_white_payload(dev_index, True, 100, True),
+                                   key1, nonce, cmd_id=1), 4.0))
+        frames.append(("AUS", build_frame(target_lmp, build_white_payload(dev_index, False, 100, True),
+                                          key1, nonce, cmd_id=2), 2.0))
+        # B: Weiß OHNE Flag — Gegenprobe (bisheriges Verhalten)
+        frames.append(("WEISS ohne Flag",
+                       build_frame(target_lmp, build_white_payload(dev_index, True, 100, False),
+                                   key1, nonce, cmd_id=3), 4.0))
+        frames.append(("AUS", build_frame(target_lmp, build_white_payload(dev_index, False, 100, False),
+                                          key1, nonce, cmd_id=4), 2.0))
+    elif args.action == "redtest":
         frames.append(("ROT an", build_frame(target_lmp, color(True, 0, 100, 100), key1, nonce, cmd_id=1), 3.0))
         frames.append(("AUS",    build_frame(target_lmp, color(False, 0, 100, 100), key1, nonce, cmd_id=2), 0.5))
     elif args.action == "on":

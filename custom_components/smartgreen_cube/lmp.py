@@ -35,6 +35,53 @@ def hsv_to_rgb(h: float, s: float, v: float) -> tuple[int, int, int]:
     return round(r * 255), round(g * 255), round(b * 255)
 
 
+def temp_to_hs(kelvin: float) -> tuple[float, float]:
+    """Farbtemperatur -> (Hue, Sättigung) wie ``TempToHSV`` der App.
+
+    Warmweiß entsteht bei diesen Leuchten über den *Farbweg*: ein warmer
+    Ton mit hoher Sättigung. Erst bei Sättigung 0 übernimmt der (kalte)
+    Weiß-Kanal.
+    """
+    import math
+
+    t = max(1000.0, min(40000.0, kelvin)) / 100.0
+    if t <= 66:
+        re = 255.0
+        x = max(t - 2, 1e-6)
+        gr = min(255.0, -155.25485562709179 - 0.44596950469579133 * x
+                 + 104.49216199393888 * math.log(x))
+    else:
+        x = max(t - 55, 1e-6)
+        re = min(255.0, 351.97690566805693 + 0.114206453784165 * x
+                 - 40.25366309332127 * math.log(x))
+        x = max(t - 50, 1e-6)
+        gr = min(255.0, 325.4494125711974 + 0.07943456536662342 * x
+                 - 28.0852963507957 * math.log(x))
+    if t >= 66:
+        bl = 255.0
+    elif t < 19:
+        bl = 0.0
+    else:
+        x = max(t - 10, 1e-6)
+        bl = min(255.0, -254.76935184120902 + 0.8274096064007395 * x
+                 + 115.67994401066147 * math.log(x))
+
+    r, g, b = max(0.0, re), max(0.0, gr), max(0.0, bl)
+    mx, mn = max(r, g, b), min(r, g, b)
+    if mx == 0:
+        return 0.0, 0.0
+    s = (mx - mn) / mx * 100.0
+    if mx == mn:
+        h = 0.0
+    elif mx == r:
+        h = (60 * ((g - b) / (mx - mn))) % 360
+    elif mx == g:
+        h = 60 * ((b - r) / (mx - mn)) + 120
+    else:
+        h = 60 * ((r - g) / (mx - mn)) + 240
+    return h % 360, s
+
+
 def _process_color(h: float, s: float, v: float) -> dict:
     """processColor() für RGBW-Leuchte (color_mode COLOR, linear aus, rgbw an)."""
     r, g, b = hsv_to_rgb(h, s, 100)
