@@ -45,6 +45,13 @@ _LOGGER = logging.getLogger(__name__)
 # laufen so ohne erneuten Verbindungsaufbau.
 IDLE_DISCONNECT = 20.0
 
+# Der erste Verbindungsaufbau ist die wacklige Stelle: die Cubes werben nur
+# periodisch, und über einen ESPHome-Proxy braucht der Aufbau ein paar Anläufe.
+# Sobald die Verbindung steht, laufen Befehle zuverlässig.
+DEVICE_WAIT_TRIES = 6      # Versuche, ein verbindbares Gerät zu bekommen
+DEVICE_WAIT_DELAY = 1.5    # Sekunden zwischen den Versuchen
+CONNECT_ATTEMPTS = 5       # Verbindungsversuche von bleak-retry-connector
+
 _LOCKS: dict[str, asyncio.Lock] = {}
 _CLIENTS: dict[str, Any] = {}
 _IDLE_TASKS: dict[str, asyncio.Task] = {}
@@ -237,18 +244,39 @@ class SmartGreenCubeLight(LightEntity):
         return build_frame(self._lmp, payload, self._key, self._nonce,
                            cmd_id=self._next_cmd_id())
 
+    async def _acquire_device(self, mac: str) -> Any:
+        """Wartet geduldig auf ein verbindbares Gerät.
+
+        Die Cubes werben nur periodisch. Direkt nach dem Start (oder wenn eine
+        Weile kein Befehl kam) hat Home Assistant oft noch kein frisches
+        Advertisement — dann gibt es kurzzeitig keinen verbindbaren Pfad. Statt
+        sofort aufzugeben, warten wir ein paar Werbeintervalle ab.
+        """
+        for attempt in range(DEVICE_WAIT_TRIES):
+            device = bluetooth.async_ble_device_from_address(
+                self.hass, mac, connectable=True
+            )
+            if device is not None:
+                return device
+            if attempt == 0:
+                _LOGGER.debug("%s: warte auf Advertisement von %s",
+                              self._attr_name, mac)
+            await asyncio.sleep(DEVICE_WAIT_DELAY)
+        return None
+
     async def _write_once(self, mac: str, frame: bytes) -> None:
         """Schreibt ein Frame; hält die Verbindung für Folgebefehle offen."""
         client = _CLIENTS.get(mac)
         fresh = False
         if client is None or not client.is_connected:
-            ble_device = bluetooth.async_ble_device_from_address(
-                self.hass, mac, connectable=True
-            )
+            ble_device = await self._acquire_device(mac)
             if ble_device is None:
-                raise RuntimeError(f"BLE-Gerät {mac} derzeit nicht verfügbar")
+                raise RuntimeError(
+                    f"BLE-Gerät {mac} meldet sich nicht (kein Advertisement)"
+                )
             client = await establish_connection(
-                BleakClientWithServiceCache, ble_device, self._attr_name
+                BleakClientWithServiceCache, ble_device, self._attr_name,
+                max_attempts=CONNECT_ATTEMPTS,
             )
             _CLIENTS[mac] = client
             fresh = True
