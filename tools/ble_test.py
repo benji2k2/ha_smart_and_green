@@ -16,7 +16,7 @@ Benutzung:
 
 Erste Ausführung: macOS fragt nach Bluetooth-Zugriff fürs Terminal -> erlauben.
 """
-import argparse, asyncio, json, os, sys
+import argparse, asyncio, hashlib, json, os, sys
 from Crypto.Cipher import AES
 from bleak import BleakScanner, BleakClient
 
@@ -311,7 +311,10 @@ def main():
     key1 = conf["keyCrypt1"]
     nonce = conf["nounceAESCrypt"]
     enc_mode = conf.get("encryptionMode", 2)
-    print(f"encryptionMode={enc_mode}  key1={hexs(key1)}  nonce={hexs(nonce)}")
+    # Key/Nonce NICHT ausgeben: Debug-Ausgaben landen erfahrungsgemäss in
+    # Bug-Reports. Zum Vergleichen genuegt ein Fingerabdruck.
+    fp = hashlib.sha256(key1 + nonce).hexdigest()[:8]
+    print(f"encryptionMode={enc_mode}  key/nonce geladen (fingerprint {fp})")
 
     modkey = "mod_1" if args.small else "mod_0"
     mod = conf[modkey]
