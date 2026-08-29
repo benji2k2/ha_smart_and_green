@@ -28,11 +28,35 @@ Die Steuerung läuft über den Bluetooth-Adapter des HA-Hosts oder einen
 
 ## Features
 
-- Ein `light`-Entity pro Cube: **An/Aus, Helligkeit, Farbe (HS)**
+- Ein `light`-Entity pro Cube: **An/Aus, Helligkeit, Farbe (HS), Farbtemperatur**
 - Optionales Gruppen-Entity **„Alle"** (Broadcast an alle Cubes)
+- **Diagnosesensoren** je Cube: Signalstärke, zuletzt gesehen, verwendeter Proxy
 - Transparente Nutzung vorhandener **ESPHome-Bluetooth-Proxys**
 - **Auto-Discovery** der Cubes per BLE-Advertisement (Company-ID `0x04AA`)
 - Schlüssel-Import direkt aus dem `.lap`-Export der App
+
+### Reichweite beachten
+
+Die Cubes sind BLE-Geräte mit kleiner Antenne. Unter **−75 dBm** wird die
+Verbindung unzuverlässig: Sie kommt oft noch zustande, bricht dann aber während
+der Service-Discovery ab — das sieht wie ein sporadischer Softwarefehler aus,
+ist aber schlicht Funkreichweite. Fünf Meter durch eine massive Wand reichen
+erfahrungsgemäß **nicht**.
+
+Der Sensor **Signalstärke** zeigt den aktuellen Wert, und unter −75 dBm warnt
+die Integration im Protokoll. Abhilfe ist immer ein Bluetooth-Proxy näher am
+Cube — Home Assistant wählt automatisch den mit dem besten Empfang.
+
+### Was es (noch) nicht gibt
+
+- **Kein Rücklesen von An/Aus und Farbe.** Die Cubes senden ihren Zustand nicht
+  per Advertisement; dort steht nur der Netzwerkzustand. Der Zustand in Home
+  Assistant ist deshalb *optimistic* (`assumed_state`).
+- **Kein Akkustand.** Obwohl es Akkuleuchten sind, beantwortet die Firmware die
+  Abfrage nicht: `LMP_COMMAND_MODULE_BATTERY_STATUS_GET` (0x2D) wird mit
+  `LMP_ERR_NOT_SUPPORTED` quittiert, `0x2C` bleibt unbeantwortet, und die
+  Antwort auf `MODULE_INFO_GET` enthält kein Akkufeld. Am Gerät geprüft mit
+  Firmware 2.9.0 / API 4.
 
 ## Voraussetzungen
 
@@ -77,10 +101,11 @@ Integrations-Icons stammt aus der Original-App (RGBW-„Cube").
 
 ## Status
 
-Frühe Version (v0.1.0). Protokoll, Verschlüsselung und Frame-Format sind **am
-echten Gerät verifiziert**; die HA-Laufzeit (Config-Flow, Write über Proxy,
-Gruppen-Broadcast) profitiert noch von Feld-Tests. Der Zustand ist derzeit
-*optimistic* (kein Rücklesen). Rückmeldungen/Issues willkommen.
+Protokoll, Verschlüsselung, Frame-Format und Advertisement-Aufbau sind **am
+echten Gerät verifiziert**, ebenso die Steuerung im Alltag (An/Aus, Helligkeit,
+Farbe, Farbtemperatur) über einen ESPHome-Proxy. Der Gruppen-Broadcast an
+`FF:FF` ist noch ungetestet. Der Zustand ist *optimistic* — siehe „Was es (noch)
+nicht gibt". Rückmeldungen/Issues willkommen.
 
 ## Sicherheit / Datenschutz
 

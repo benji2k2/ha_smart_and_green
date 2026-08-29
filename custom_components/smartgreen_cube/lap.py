@@ -13,7 +13,16 @@ import struct
 import zlib
 from typing import Any
 
-from .const import DEFAULT_CLASS, MOD_CLASS, MOD_INDEX, MOD_LMP, MOD_NAME
+from .const import (
+    DEFAULT_CLASS,
+    MOD_CLASS,
+    MOD_HW,
+    MOD_INDEX,
+    MOD_LMP,
+    MOD_MODEL,
+    MOD_NAME,
+    MOD_SW,
+)
 
 # Standard-CRC32-Tabelle (reflektiertes Polynom 0xEDB88320) für ZipCrypto.
 _CRC_TABLE = []
@@ -98,6 +107,14 @@ def extract_keys(config: list[dict[str, Any]]) -> tuple[bytes, bytes, int]:
     return key1, nonce, mode
 
 
+def _version_str(raw: Any) -> str | None:
+    """[2, 9, 0, ""] -> "2.9.0"; alles Unbrauchbare -> None."""
+    if not isinstance(raw, list):
+        return None
+    parts = [str(x) for x in raw if isinstance(x, int)]
+    return ".".join(parts) or None
+
+
 def extract_modules(config: list[dict[str, Any]]) -> tuple[list[dict], dict | None]:
     """Liefert (Module, Gruppe) mit Name, LMP-Adresse, Device-Index und Klasse."""
     m = _as_map(config)
@@ -116,11 +133,15 @@ def extract_modules(config: list[dict[str, Any]]) -> tuple[list[dict], dict | No
             dev = m[devs[0]]
             index = dev.get("identification", {}).get("index", 0)
             cls = dev.get("identification", {}).get("type", {}).get("class_id", DEFAULT_CLASS)
+        infos = val.get("infos", {})
         modules.append({
             MOD_NAME: ident.get("name", f"Cube {lmp}"),
             MOD_LMP: lmp,
             MOD_INDEX: index,
             MOD_CLASS: cls,
+            MOD_SW: _version_str(infos.get("firmware_version")),
+            MOD_HW: _version_str(infos.get("hardware_version")),
+            MOD_MODEL: infos.get("model_name") or None,
         })
 
     group = None

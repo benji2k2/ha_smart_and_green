@@ -289,7 +289,11 @@ LMP_NAMES = {
     0x93: "STATUS_DEVICE_DATA", 0x8F: "STATUS_DEVICE_INFO",
     0xAF: "PARAM_MODULE_REFERENCE", 0xB0: "PARAM_MAC_ADDRESS",
     0xB1: "PARAM_SHORT_ADDRESS", 0xB4: "PARAM_MODULE_TYPE",
-    0xB5: "PARAM_MODULE_SW_VERSION", 0xC0: "PARAM_BATTERY_LEVEL",
+    0xB2: "PARAM_MANUFACTURER_NAME", 0xB3: "PARAM_MODEL_NAME",
+    0xB5: "PARAM_SW_VERSION", 0xB6: "PARAM_HW_VERSION",
+    0xB7: "PARAM_MODULE_NAME", 0xB8: "PARAM_API_VERSION",
+    0xB9: "PARAM_DEV_LIST_CHANGEABLE", 0xC0: "PARAM_BATTERY_LEVEL",
+    0xC1: "PARAM_ROLE",
     0xC2: "PARAM_RSSI",
 }
 OP_MODULE_BATTERY_STATUS_GET = 0x2D
@@ -378,21 +382,50 @@ async def do_adv(ks, seconds=12.0):
             print(f"      {name:26} {hexs(data)}{extra}")
 
 
+def fmt_tlv_value(data):
+    if data and all(32 <= c < 127 for c in data):
+        return f'  "{data.decode()}"'
+    if 0 < len(data) <= 4:
+        return f"  -> {int.from_bytes(data, 'little')}"
+    return ""
+
+
 async def query_module(dev, ks, frames):
-    """Sendet Abfrage-Frames und dekodiert die Notify-Antworten."""
+    """Sendet Abfrage-Frames und dekodiert die Notify-Antworten.
+
+    Laengere Antworten kommen als MEHRERE Notifies: Byte [2] ist der Index,
+    Byte [3] der hoechste Index. Jedes Fragment ist einzeln verschluesselt und
+    CRC-gesichert, aber die TLV-Liste laeuft ueber die Fragmentgrenzen hinweg —
+    sie darf also erst nach dem Zusammensetzen zerlegt werden.
+    """
     answers = []
+    parts = {}
+
+    def flush():
+        if not parts:
+            return
+        stream = b"".join(parts[i] for i in sorted(parts))
+        for typ, name, val in decode_tlv(stream):
+            print(f"     {name:26} {hexs(val)}{fmt_tlv_value(val)}")
+            answers.append((name, bytes(val)))
+        parts.clear()
 
     def on_notify(_char, data):
         print(f"  <- NOTIFY {hexs(data)}")
-        if len(data) >= 20:
-            tlv = decode_encrypted_payload(data[4:20], ks)
-            if tlv is None:
-                print("     (CRC-Fehler / anderes Format)")
-                return
-            for typ, name, val in tlv:
-                extra = f" -> {int.from_bytes(val, 'little')}" if 0 < len(val) <= 4 else ""
-                print(f"     {name:26} {hexs(val)}{extra}")
-                answers.append((name, bytes(val)))
+        if len(data) < 20:
+            return
+        idx, tot = data[2], data[3]
+        pay = bytes(a ^ b for a, b in zip(data[4:20], ks))
+        crc_rx, body = pay[0], pay[1:16]
+        crc = 0
+        for x in body:
+            crc ^= x
+        if crc != crc_rx:
+            print("     (CRC-Fehler / anderes Format)")
+            return
+        parts[idx] = body
+        if idx >= tot:          # letztes Fragment -> auswerten
+            flush()
 
     async with BleakClient(dev) as client:
         print(f"  verbunden: {client.address}")
@@ -404,6 +437,7 @@ async def query_module(dev, ks, frames):
             except Exception:
                 await client.write_gatt_char(CHAR_UUID, fr, response=False)
             await asyncio.sleep(3.0)
+            flush()   # unvollstaendige Antwort trotzdem zeigen
         try:
             await client.stop_notify(CHAR_UUID)
         except Exception:

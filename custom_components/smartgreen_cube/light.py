@@ -18,7 +18,6 @@ from homeassistant.components.light import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
@@ -29,12 +28,12 @@ from .const import (
     CONF_MODULES,
     CONF_NONCE,
     DEFAULT_CLASS,
-    DOMAIN,
     MOD_CLASS,
     MOD_INDEX,
     MOD_LMP,
     MOD_NAME,
 )
+from .device import build_device_info
 from .lmp import build_color_payload, build_frame, temp_to_hs
 
 _LOGGER = logging.getLogger(__name__)
@@ -240,12 +239,7 @@ class SmartGreenCubeLight(LightEntity):
         self._attr_hs_color = (30.0, 85.0)
 
         if not is_group:
-            self._attr_device_info = DeviceInfo(
-                identifiers={(DOMAIN, self._lmp)},
-                name=self._attr_name,
-                manufacturer="Smart & Green / Linkio",
-                model="Cube RGBW",
-            )
+            self._attr_device_info = build_device_info(module)
 
     def _next_cmd_id(self) -> int:
         self._cmd_id = (self._cmd_id + 1) % 256

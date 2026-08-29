@@ -18,6 +18,9 @@ MOD_NAME = "name"
 MOD_LMP = "lmp_addr"
 MOD_INDEX = "index"
 MOD_CLASS = "class"
+MOD_SW = "sw_version"
+MOD_HW = "hw_version"
+MOD_MODEL = "model"
 
 # LMP-Protokoll
 DEFAULT_CLASS = 19  # color-white-dimmable-light

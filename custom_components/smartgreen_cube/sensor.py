@@ -7,7 +7,6 @@ Steuerung nicht.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-import logging
 import time
 
 from homeassistant.components import bluetooth
@@ -19,7 +18,6 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, SIGNAL_STRENGTH_DECIBELS_MILLIWATT
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
@@ -27,14 +25,10 @@ from .const import (
     CONF_KEY,
     CONF_MODULES,
     CONF_NONCE,
-    DOMAIN,
     MOD_LMP,
-    MOD_NAME,
 )
+from .device import build_device_info
 from .lmp import decode_advertisement
-
-_LOGGER = logging.getLogger(__name__)
-
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
@@ -62,12 +56,7 @@ class _CubeDiagnosticSensor(SensorEntity):
         self.hass = hass
         self._lmp = module[MOD_LMP]
         self._attr_unique_id = f"{entry.entry_id}_{self._lmp}_{key}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, self._lmp)},
-            name=module.get(MOD_NAME) or f"Cube {self._lmp}",
-            manufacturer="Smart & Green / Linkio",
-            model="Cube RGBW",
-        )
+        self._attr_device_info = build_device_info(module)
 
     def _service_info(self):
         """Letztes Advertisement dieses Cubes, oder None."""
