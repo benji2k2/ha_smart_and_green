@@ -93,6 +93,11 @@ the cube — Home Assistant automatically picks the one with the best reception.
   reply contains no battery field. Checked on device with firmware 2.9.0 /
   API 4.
 
+  The vendor app cannot show it either: it has a listener for a battery event
+  that nothing ever emits, and its battery display is commented out in the
+  source. LMP is a platform protocol covering battery sensors too, so the
+  opcodes exist — this particular device just does not implement them.
+
 ## Requirements
 
 - Home Assistant **2024.4+** with the **Bluetooth** integration enabled

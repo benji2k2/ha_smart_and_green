@@ -93,6 +93,12 @@ Cube — Home Assistant wählt automatisch den mit dem besten Empfang.
   Antwort auf `MODULE_INFO_GET` enthält kein Akkufeld. Am Gerät geprüft mit
   Firmware 2.9.0 / API 4.
 
+  Die Hersteller-App kann es ebenso wenig anzeigen: Sie hat einen Empfänger
+  für ein Akku-Ereignis, das niemand sendet, und ihre Akku-Anzeige ist im
+  Quelltext auskommentiert. LMP ist ein Plattform-Protokoll, das auch
+  Batteriesensoren abdeckt — die Opcodes existieren, dieses Gerät setzt sie
+  nur nicht um.
+
 ## Voraussetzungen
 
 - Home Assistant **2024.4+** mit aktiver **Bluetooth**-Integration
