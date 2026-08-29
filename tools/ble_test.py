@@ -128,15 +128,27 @@ def encrypt_payload(full16, key1, nonce):
     return [full16[i] ^ keystream[i] for i in range(16)]
 
 
+FRAME_LOCAL_SHORT = 0x00
+
+
 def build_frame(lmp_addr, payload, key1, nonce, cmd_id=1,
-                encryption=ENC_PRIVATE, msg_type=MSG_CMD_NO_ACK):
-    """sendBytesCmd() Short-Frame -> 20 Byte fertig fuer den GATT-Write."""
+                encryption=ENC_PRIVATE, msg_type=MSG_CMD_NO_ACK,
+                frame_type=FRAME_LMP_SHORT):
+    """sendBytesCmd() Short-Frame -> 20 Byte fertig fuer den GATT-Write.
+
+    frame_type LOCAL (0) entspricht CONX_MODE_DIRECT der App: bei direkter
+    Verbindung stehen statt der LMP-Adresse zwei Nullbytes. Genau so antwortet
+    der Cube uns auch (Header 0x50 = msg_type 2 / enc 2 / frame 0).
+    """
     # Header
-    b0 = ((msg_type << 5) & 0xE0) | ((encryption << 3) & 0x18) | (FRAME_LMP_SHORT & 0x07)
+    b0 = ((msg_type << 5) & 0xE0) | ((encryption << 3) & 0x18) | (frame_type & 0x07)
     header = [b0, cmd_id & 0xFF]
-    # Adresse "41:E0" -> [0xE0, 0x41] (letztes, dann vorletztes Byte)
-    parts = lmp_addr.split(":")
-    addr = [int(parts[-1], 16), int(parts[-2], 16)]
+    if frame_type == FRAME_LOCAL_SHORT:
+        addr = [0x00, 0x00]
+    else:
+        # Adresse "41:E0" -> [0xE0, 0x41] (letztes, dann vorletztes Byte)
+        parts = lmp_addr.split(":")
+        addr = [int(parts[-1], 16), int(parts[-2], 16)]
     # Payload auf 15 Byte auffuellen: erst eine 0, dann 0xFF
     pl = list(payload)
     if len(pl) < 15:
@@ -510,7 +522,7 @@ async def dump_gatt(dev):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("action",
-                    choices=["scan", "scanall", "adv", "gatt", "battery", "state",
+                    choices=["scan", "scanall", "adv", "gatt", "battery", "state", "probe",
                              "redtest", "whitetest", "sweep", "on", "off"])
     ap.add_argument("--gap", action="store_true",
                     help="zwischen den Schritten ausschalten (statt direktem Wechsel)")
@@ -547,6 +559,42 @@ def main():
 
     if args.action == "adv":
         asyncio.run(do_adv(keystream(key1, nonce)))
+        return
+
+    if args.action == "probe":
+        import time as _time
+        target = mod["identification"]["lmp_addr"]
+        ks = keystream(key1, nonce)
+        now = int(_time.time())
+        OP_DEVICE_PROPERTY_GET = 0x44
+        variants = [
+            ("DATA_GET local, ganzer Bereich",
+             build_state_query(target, dev_index, 0, 0xFFFFFFFF), FRAME_LOCAL_SHORT),
+            ("DATA_GET local, Bereich 0/0",
+             build_state_query(target, dev_index, 0, 0), FRAME_LOCAL_SHORT),
+            ("DATA_GET local, letzte Stunde",
+             build_state_query(target, dev_index, now - 3600, now + 60), FRAME_LOCAL_SHORT),
+            ("DATA_GET lmp, Klassen-ID 19 statt Geraet",
+             build_state_query(target, class_id, 0, 0xFFFFFFFF), FRAME_LMP_SHORT),
+            ("PROPERTY_GET local, property 0",
+             [3, OP_DEVICE_PROPERTY_GET, dev_index, 0], FRAME_LOCAL_SHORT),
+            ("PROPERTY_GET local, property 1",
+             [3, OP_DEVICE_PROPERTY_GET, dev_index, 1], FRAME_LOCAL_SHORT),
+        ]
+        frames = [(label, build_frame(target, payload, key1, nonce, cmd_id=i + 1,
+                                      msg_type=CMD_WITH_ACK, frame_type=ft))
+                  for i, (label, payload, ft) in enumerate(variants)]
+
+        async def find_and_probe():
+            dev = await find_device(target)
+            if dev is None:
+                print("Modul nicht gefunden.")
+                return False
+            await query_module(dev, ks, frames, wait=args.wait or 4.0)
+            return True
+
+        if not asyncio.run(find_and_probe()):
+            sys.exit(1)
         return
 
     if args.action == "state":
