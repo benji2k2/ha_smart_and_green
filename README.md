@@ -49,9 +49,16 @@ Cube — Home Assistant wählt automatisch den mit dem besten Empfang.
 
 ### Was es (noch) nicht gibt
 
-- **Kein Rücklesen von An/Aus und Farbe.** Die Cubes senden ihren Zustand nicht
-  per Advertisement; dort steht nur der Netzwerkzustand. Der Zustand in Home
-  Assistant ist deshalb *optimistic* (`assumed_state`).
+- **Kein Rücklesen von An/Aus und Farbe.** Der Zustand steht weder im
+  Advertisement (dort nur der Netzwerkzustand), noch beantwortet die Firmware
+  eine Abfrage: `DEVICE_DATA_GET` (0x42) wird mit einem undokumentierten Code
+  abgelehnt. Die App bekommt den Zustand offenbar als Ereignis
+  (`LMP_EVENT_DEVICE_DATA`, 0x92) — im Test war keines auszulösen. Der Zustand
+  in Home Assistant ist deshalb *optimistic* (`assumed_state`).
+
+  Dafür wird jeder Befehl **quittiert**: Der Cube bestätigt mit `STATUS_ACK`,
+  ob er ihn ausgeführt hat. Ein verlorener Befehl fällt damit sofort auf und
+  wird wiederholt, statt still zu scheitern.
 - **Kein Akkustand.** Obwohl es Akkuleuchten sind, beantwortet die Firmware die
   Abfrage nicht: `LMP_COMMAND_MODULE_BATTERY_STATUS_GET` (0x2D) wird mit
   `LMP_ERR_NOT_SUPPORTED` quittiert, `0x2C` bleibt unbeantwortet, und die

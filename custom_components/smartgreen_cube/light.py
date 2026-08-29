@@ -34,7 +34,13 @@ from .const import (
     MOD_NAME,
 )
 from .device import build_device_info
-from .lmp import build_color_payload, build_frame, temp_to_hs
+from .lmp import (
+    ACK_ERRORS,
+    build_color_payload,
+    build_frame,
+    parse_ack,
+    temp_to_hs,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,7 +63,15 @@ RETRY_BACKOFF = 0.4        # Sekunden Pause zwischen den Anläufen
 # noch zustande, bricht dann aber während der Service-Discovery ab.
 WEAK_RSSI = -75
 
+# So lange warten wir auf die Quittung des Cubes. Am Geraet kam sie stets
+# innerhalb von Millisekunden; grosszuegig gewaehlt fuer schwache Verbindungen.
+ACK_TIMEOUT = 3.0
+
 _LOCKS: dict[str, asyncio.Lock] = {}
+# Offene Quittungen: mac -> cmd_id -> Future
+_ACK_WAITERS: dict[str, dict[int, asyncio.Future]] = {}
+# Auf welchen Verbindungen wir Quittungen tatsaechlich empfangen koennen
+_ACK_ACTIVE: dict[str, bool] = {}
 _CLIENTS: dict[str, Any] = {}
 _IDLE_TASKS: dict[str, asyncio.Task] = {}
 # Einmal aufgelöste BLE-Adressen; Cubes werben nach dem Verbinden nicht weiter.
@@ -126,6 +140,7 @@ async def _release_other_clients(keep: str) -> None:
     for other in [m for m in _CLIENTS if m != keep]:
         if (task := _IDLE_TASKS.pop(other, None)) is not None:
             task.cancel()
+        _forget_connection(other)
         client = _CLIENTS.pop(other, None)
         if client is not None and client.is_connected:
             _LOGGER.debug("Gebe Verbindung zu %s frei (Wechsel auf %s)", other, keep)
@@ -145,6 +160,7 @@ def _schedule_idle_disconnect(mac: str) -> None:
             await asyncio.sleep(IDLE_DISCONNECT)
         except asyncio.CancelledError:
             return
+        _forget_connection(mac)
         client = _CLIENTS.pop(mac, None)
         if client is not None and client.is_connected:
             try:
@@ -155,7 +171,16 @@ def _schedule_idle_disconnect(mac: str) -> None:
     _IDLE_TASKS[mac] = asyncio.create_task(_close())
 
 
+def _forget_connection(mac: str) -> None:
+    """Verwirft Quittungs-Zustand einer nicht mehr bestehenden Verbindung."""
+    _ACK_ACTIVE.pop(mac, None)
+    for waiter in _ACK_WAITERS.pop(mac, {}).values():
+        if not waiter.done():
+            waiter.cancel()
+
+
 async def _drop_client(mac: str) -> None:
+    _forget_connection(mac)
     client = _CLIENTS.pop(mac, None)
     if client is not None:
         try:
@@ -248,8 +273,8 @@ class SmartGreenCubeLight(LightEntity):
     def _target_lmps(self) -> list[str]:
         return self._members if self._is_group else [self._lmp]
 
-    def _build_frame(self) -> bytes:
-        """Baut das LMP-Frame aus dem gewünschten Zustand."""
+    def _build_frame(self) -> tuple[bytes, int]:
+        """Baut das LMP-Frame aus dem gewünschten Zustand; liefert (Frame, cmd_id)."""
         if self._attr_color_mode == ColorMode.COLOR_TEMP:
             h, s = temp_to_hs(self._attr_color_temp_kelvin or 2700)
         else:
@@ -262,8 +287,12 @@ class SmartGreenCubeLight(LightEntity):
             self._index, self._attr_is_on, h, s, v,
             is_group=self._is_group, class_id=self._class,
         )
-        return build_frame(self._lmp, payload, self._key, self._nonce,
-                           cmd_id=self._next_cmd_id())
+        # Gruppen-Broadcasts werden nicht quittiert — es gäbe keinen eindeutigen
+        # Absender. Für einzelne Cubes lassen wir bestätigen.
+        cmd_id = self._next_cmd_id()
+        frame = build_frame(self._lmp, payload, self._key, self._nonce,
+                            cmd_id=cmd_id, want_ack=not self._is_group)
+        return frame, cmd_id
 
     async def _acquire_device(self, mac: str) -> Any:
         """Wartet geduldig auf ein verbindbares Gerät.
@@ -285,8 +314,12 @@ class SmartGreenCubeLight(LightEntity):
             await asyncio.sleep(DEVICE_WAIT_DELAY)
         return None
 
-    async def _write_once(self, mac: str, frame: bytes) -> None:
-        """Schreibt ein Frame; hält die Verbindung für Folgebefehle offen."""
+    async def _write_once(self, mac: str, frame: bytes, cmd_id: int,
+                          expect_ack: bool) -> None:
+        """Schreibt ein Frame und wartet auf die Quittung des Cubes.
+
+        Hält die Verbindung für Folgebefehle offen.
+        """
         client = _CLIENTS.get(mac)
         fresh = False
         if client is None or not client.is_connected:
@@ -302,6 +335,12 @@ class SmartGreenCubeLight(LightEntity):
             )
             _CLIENTS[mac] = client
             fresh = True
+            await self._start_ack_listener(mac, client)
+
+        waiter: asyncio.Future | None = None
+        if expect_ack and _ACK_ACTIVE.get(mac):
+            waiter = asyncio.get_running_loop().create_future()
+            _ACK_WAITERS.setdefault(mac, {})[cmd_id] = waiter
 
         # "Write without response" ist fire-and-forget: der Proxy quittiert den
         # Aufruf sofort, auch wenn das Frame den Cube nie erreicht — ein Fehler
@@ -314,18 +353,61 @@ class SmartGreenCubeLight(LightEntity):
             _LOGGER.debug("%s: Write-Modus %s", self._attr_name,
                           "mit Quittung" if acked else "ohne Quittung")
 
-        await client.write_gatt_char(target, frame, response=acked)
+        try:
+            await client.write_gatt_char(target, frame, response=acked)
 
-        # Direkt nach einem frischen Verbindungsaufbau verschluckt das Modul
-        # den ersten Write gelegentlich — dann einmal nachlegen.
-        if fresh:
-            await asyncio.sleep(0.12)
-            try:
-                await client.write_gatt_char(target, frame, response=acked)
-            except Exception:  # noqa: BLE001
-                pass
+            # Direkt nach einem frischen Verbindungsaufbau verschluckt das
+            # Modul den ersten Write gelegentlich — dann einmal nachlegen.
+            # Die Wiederholung traegt dieselbe cmd_id, der Cube quittiert sie
+            # also unter derselben Nummer.
+            if fresh:
+                await asyncio.sleep(0.12)
+                try:
+                    await client.write_gatt_char(target, frame, response=acked)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            if waiter is not None:
+                try:
+                    code = await asyncio.wait_for(waiter, ACK_TIMEOUT)
+                except asyncio.TimeoutError as err:
+                    raise RuntimeError(
+                        "Cube hat den Befehl nicht bestätigt"
+                    ) from err
+                if code != 0:
+                    raise RuntimeError(
+                        f"Cube meldet Fehler {ACK_ERRORS.get(code, code)}"
+                    )
+        finally:
+            if waiter is not None:
+                _ACK_WAITERS.get(mac, {}).pop(cmd_id, None)
 
         _schedule_idle_disconnect(mac)
+
+    async def _start_ack_listener(self, mac: str, client: Any) -> None:
+        """Abonniert die Notify-Characteristic, um Quittungen zu empfangen.
+
+        Schlaegt das fehl, laeuft alles weiter wie bisher — dann warten wir
+        eben nicht auf eine Bestaetigung, statt den Befehl scheitern zu lassen.
+        """
+        key, nonce = self._key, self._nonce
+
+        def _on_notify(_char: Any, data: bytearray) -> None:
+            parsed = parse_ack(bytes(data), key, nonce)
+            if parsed is None:
+                return
+            cmd_id, code = parsed
+            waiter = _ACK_WAITERS.get(mac, {}).get(cmd_id)
+            if waiter is not None and not waiter.done():
+                waiter.set_result(code)
+
+        try:
+            await client.start_notify(CHAR_UUID, _on_notify)
+            _ACK_ACTIVE[mac] = True
+        except Exception as err:  # noqa: BLE001
+            _ACK_ACTIVE[mac] = False
+            _LOGGER.debug("%s: keine Quittungen verfügbar (%s)",
+                          self._attr_name, err)
 
     def _log_link_quality(self, mac: str) -> None:
         """Protokolliert die Signalstärke und warnt bei schwachem Link.
@@ -349,7 +431,7 @@ class SmartGreenCubeLight(LightEntity):
 
     async def _send(self) -> None:
         """Sendet den aktuellen Zustand; probiert alle erreichbaren Module."""
-        frame = self._build_frame()
+        frame, cmd_id = self._build_frame()
         _LOGGER.debug("%s: sende %s", self._attr_name, frame.hex(" "))
 
         last_err: Exception | None = None
@@ -363,7 +445,8 @@ class SmartGreenCubeLight(LightEntity):
             async with _lock_for(mac):
                 for attempt in range(1, SEND_ATTEMPTS + 1):
                     try:
-                        await self._write_once(mac, frame)
+                        await self._write_once(mac, frame, cmd_id,
+                                              expect_ack=not self._is_group)
                         _LOGGER.debug("%s: Frame gesendet (Versuch %d, %s)",
                                       self._attr_name, attempt, mac)
                         return

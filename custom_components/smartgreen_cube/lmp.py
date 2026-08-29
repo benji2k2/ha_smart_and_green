@@ -11,6 +11,7 @@ from .const import FADE_COLOR_TRANSITION
 
 # LMP-Header-Konstanten (aus core_ble_type.js)
 _MSG_CMD_NO_ACK = 0x00
+_MSG_CMD_WITH_ACK = 0x01
 _ENC_PRIVATE = 0x02
 _FRAME_LMP_SHORT = 0x02
 _OP_DEVICE_DATA_SET = 0x41
@@ -194,11 +195,51 @@ def _encrypt(full16: list[int], key1: bytes, nonce: bytes) -> list[int]:
     return [full16[i] ^ keystream[i] for i in range(16)]
 
 
+#: Fehlercodes aus ``lmp_error_codes_e``; 0x39 ist undokumentiert und kommt
+#: auf Abfragen, die diese Firmware nicht bedient.
+ACK_ERRORS = {
+    0x00: "SUCCESS", 0x01: "NOT_SUPPORTED", 0x02: "INVALID_COMMAND",
+    0x03: "INVALID_PARAMETER", 0x04: "INVALID_DEVICE", 0x05: "UNREGISTERED",
+    0x06: "CLEAR_MSG_UNAUTHORIZED", 0x07: "CRYPT_MSG", 0x08: "TIMEOUT",
+    0x09: "CONNECT_ERROR", 0x0A: "MEMORY_FAIL", 0x0B: "MEMORY_FULL",
+    0x14: "ITEM_NOT_FOUND",
+}
+_OP_STATUS_ACK = 0x80
+
+
+def parse_ack(data: bytes, key1: bytes, nonce: bytes) -> tuple[int, int] | None:
+    """Wertet eine Notify-Antwort aus und liefert ``(cmd_id, fehlercode)``.
+
+    Der Cube quittiert jeden Befehl, der mit ``CMD_WITH_ACK`` gesendet wurde —
+    am Gerät verifiziert. Rückgabe ``None``, wenn das Paket keine Quittung ist
+    (etwa ein Status-Frame) oder die Prüfsumme nicht stimmt.
+    """
+    if len(data) < 20:
+        return None
+    cmd_id = data[1]
+    payload = bytes(a ^ b for a, b in zip(data[4:20], _keystream(key1, nonce)))
+    crc_rx, body = payload[0], payload[1:16]
+    crc = 0
+    for byte in body:
+        crc ^= byte
+    if crc != crc_rx:
+        return None
+    if body[0] < 2 or body[1] != _OP_STATUS_ACK:
+        return None
+    return cmd_id, body[2]
+
+
 def build_frame(lmp_addr: str, payload: list[int], key1: bytes, nonce: bytes,
-                cmd_id: int = 1) -> bytes:
-    """sendBytesCmd() Short-Frame (PRIVATE-Encryption) -> 20-Byte-GATT-Write."""
+                cmd_id: int = 1, want_ack: bool = True) -> bytes:
+    """sendBytesCmd() Short-Frame (PRIVATE-Encryption) -> 20-Byte-GATT-Write.
+
+    ``want_ack`` entspricht ``CMD_WITH_ACK`` der App: Der Cube bestätigt den
+    Befehl dann mit einem Quittungs-Frame. Nur das Nachrichtentyp-Feld im
+    Kopfbyte ändert sich dadurch, Nutzlast und Prüfsumme bleiben gleich.
+    """
+    msg_type = _MSG_CMD_WITH_ACK if want_ack else _MSG_CMD_NO_ACK
     b0 = (
-        ((_MSG_CMD_NO_ACK << 5) & 0xE0)
+        ((msg_type << 5) & 0xE0)
         | ((_ENC_PRIVATE << 3) & 0x18)
         | (_FRAME_LMP_SHORT & 0x07)
     )

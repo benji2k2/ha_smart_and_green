@@ -1,7 +1,7 @@
 {
   "domain": "smartgreen_cube",
   "name": "Smart & Green Cube",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "config_flow": true,
   "documentation": "https://github.com/benji2k2/ha_smart_and_green",
   "issue_tracker": "https://github.com/benji2k2/ha_smart_and_green/issues",
