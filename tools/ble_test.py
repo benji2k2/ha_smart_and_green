@@ -298,7 +298,8 @@ async def do_scan_all(seconds=10.0):
 LMP_NAMES = {
     0x82: "STATUS_NETWORK", 0x84: "STATUS_NETWORK_GTW_LIST",
     0x80: "STATUS_ACK", 0x81: "STATUS_REGISTRATION", 0x83: "STATUS_HEARTBEAT",
-    0x93: "STATUS_DEVICE_DATA", 0x8F: "STATUS_DEVICE_INFO",
+    0x91: "STATUS_DEVICE_INFO", 0x92: "EVENT_DEVICE_DATA",
+    0x93: "STATUS_DEVICE_DATA", 0x8F: "STATUS_DEVICE_INFO_OLD",
     0xAF: "PARAM_MODULE_REFERENCE", 0xB0: "PARAM_MAC_ADDRESS",
     0xB1: "PARAM_SHORT_ADDRESS", 0xB4: "PARAM_MODULE_TYPE",
     0xB2: "PARAM_MANUFACTURER_NAME", 0xB3: "PARAM_MODEL_NAME",
@@ -465,7 +466,7 @@ async def query_module(dev, ks, frames, wait=3.0):
                          5: "UNREGISTERED", 8: "TIMEOUT", 20: "ITEM_NOT_FOUND"}
                 print(f"       -> ACK {val[0]} = "
                       f"{known.get(val[0], 'UNBEKANNT (evtl. Anzahl Datensaetze)')}")
-            if typ == OP_STATUS_DEVICE_DATA:
+            if typ in (OP_STATUS_DEVICE_DATA, 0x92):
                 st = decode_device_data(val)
                 if st:
                     print(f"       -> AN={st['an']} ledmode={st['ledmode']} "
@@ -522,7 +523,7 @@ async def dump_gatt(dev):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("action",
-                    choices=["scan", "scanall", "adv", "gatt", "battery", "state", "probe", "probe2",
+                    choices=["scan", "scanall", "adv", "gatt", "battery", "state", "probe", "probe2", "acktest",
                              "redtest", "whitetest", "sweep", "on", "off"])
     ap.add_argument("--gap", action="store_true",
                     help="zwischen den Schritten ausschalten (statt direktem Wechsel)")
@@ -559,6 +560,32 @@ def main():
 
     if args.action == "adv":
         asyncio.run(do_adv(keystream(key1, nonce)))
+        return
+
+    if args.action == "acktest":
+        target = mod["identification"]["lmp_addr"]
+        ks = keystream(key1, nonce)
+        # Die App steuert mit CMD_WITH_ACK. Wir pruefen zweierlei:
+        # 1. quittiert der Cube den Steuerbefehl (Zustellbestaetigung)?
+        # 2. meldet er die Aenderung als LMP_EVENT_DEVICE_DATA (0x92) zurueck?
+        steps = [
+            ("ROT an  (mit ACK)", build_color_payload(dev_index, True, 0, 100, 100)),
+            ("AUS     (mit ACK)", build_color_payload(dev_index, False, 0, 100, 100)),
+        ]
+        frames = [(label, build_frame(target, payload, key1, nonce, cmd_id=i + 1,
+                                      msg_type=CMD_WITH_ACK))
+                  for i, (label, payload) in enumerate(steps)]
+
+        async def find_and_ack():
+            dev = await find_device(target)
+            if dev is None:
+                print("Modul nicht gefunden.")
+                return False
+            await query_module(dev, ks, frames, wait=args.wait or 5.0)
+            return True
+
+        if not asyncio.run(find_and_ack()):
+            sys.exit(1)
         return
 
     if args.action == "probe2":
