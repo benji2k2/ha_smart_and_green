@@ -382,6 +382,45 @@ async def do_adv(ks, seconds=12.0):
             print(f"      {name:26} {hexs(data)}{extra}")
 
 
+OP_DEVICE_DATA_GET = 0x42
+OP_STATUS_DEVICE_DATA = 0x93
+
+
+def build_state_query(dest_lmp, device_id, earliest, latest):
+    """cmdFactory.build_get_latest_statuses: Zustand eines Geraets abfragen."""
+    parts = dest_lmp.split(":")
+    b = [0, OP_DEVICE_DATA_GET,
+         int(parts[-1], 16), int(parts[-2], 16),   # Adresse: low, high
+         device_id & 0xFF]
+    for val in (earliest, latest):
+        b += [val & 0xFF, (val >> 8) & 0xFF, (val >> 16) & 0xFF, (val >> 24) & 0xFF]
+    b[0] = len(b) - 1
+    return b
+
+
+def decode_device_data(data):
+    """STATUS_DEVICE_DATA fuer eine COLOR_WHITE_DIMMABLE_LIGHT auswerten.
+
+    Feldfolge laut connectionFactory.js: Device-ID, Zeitstempel (4 Byte),
+    Status, onoff|ledmode, V, H (2 Byte), S, Params (2 Byte), optional Weiss.
+    """
+    if len(data) < 12:
+        return None
+    dev_id = data[0]
+    ts = int.from_bytes(data[1:5], "little")
+    status = data[5]
+    onoff = bool(data[6] & 0x0F)
+    led_mode = data[6] >> 4
+    v = data[7]
+    h = data[8] + (data[9] << 8)
+    s = data[10]
+    params = data[11] + (data[12] << 8) if len(data) > 12 else None
+    white = data[13] if len(data) > 13 else None
+    return {"device": dev_id, "zeit": ts, "status": status, "an": onoff,
+            "ledmode": led_mode, "v": v, "h": h, "s": s,
+            "params": params, "weiss": white}
+
+
 def fmt_tlv_value(data):
     if data and all(32 <= c < 127 for c in data):
         return f'  "{data.decode()}"'
@@ -408,6 +447,11 @@ async def query_module(dev, ks, frames):
         for typ, name, val in decode_tlv(stream):
             print(f"     {name:26} {hexs(val)}{fmt_tlv_value(val)}")
             answers.append((name, bytes(val)))
+            if typ == OP_STATUS_DEVICE_DATA:
+                st = decode_device_data(val)
+                if st:
+                    print(f"       -> AN={st['an']} ledmode={st['ledmode']} "
+                          f"V={st['v']} H={st['h']} S={st['s']} weiss={st['weiss']}")
         parts.clear()
 
     def on_notify(_char, data):
@@ -460,7 +504,7 @@ async def dump_gatt(dev):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("action",
-                    choices=["scan", "scanall", "adv", "gatt", "battery",
+                    choices=["scan", "scanall", "adv", "gatt", "battery", "state",
                              "redtest", "whitetest", "sweep", "on", "off"])
     ap.add_argument("--gap", action="store_true",
                     help="zwischen den Schritten ausschalten (statt direktem Wechsel)")
@@ -495,6 +539,32 @@ def main():
 
     if args.action == "adv":
         asyncio.run(do_adv(keystream(key1, nonce)))
+        return
+
+    if args.action == "state":
+        import time as _time
+        target = mod["identification"]["lmp_addr"]
+        ks = keystream(key1, nonce)
+        now = int(_time.time())
+        # Zwei Zeitfenster, weil unklar ist, welche Uhr der Cube fuehrt.
+        queries = [
+            ("DEVICE_DATA_GET (ganzer Bereich)", build_state_query(target, dev_index, 0, 0xFFFFFFFF)),
+            ("DEVICE_DATA_GET (letzte 24 h)", build_state_query(target, dev_index, now - 86400, now + 3600)),
+        ]
+        frames = [(label, build_frame(target, payload, key1, nonce, cmd_id=i + 1,
+                                      msg_type=CMD_WITH_ACK))
+                  for i, (label, payload) in enumerate(queries)]
+
+        async def find_and_state():
+            dev = await find_device(target)
+            if dev is None:
+                print("Modul nicht gefunden.")
+                return False
+            await query_module(dev, ks, frames)
+            return True
+
+        if not asyncio.run(find_and_state()):
+            sys.exit(1)
         return
 
     if args.action == "battery":
