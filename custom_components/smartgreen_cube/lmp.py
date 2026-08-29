@@ -1,7 +1,7 @@
-"""LMP-Protokoll (Linkio Mesh Protocol) — Frame-Bau und Verschlüsselung.
+"""LMP (Linkio Mesh Protocol) — frame building and encryption.
 
-Repliziert 1:1 die Logik der Hersteller-App (``cmdFactory.build_color_control``
-und ``connection.ble.js``), am echten Gerät verifiziert.
+Replicates the vendor app's logic (``cmdFactory.build_color_control`` and
+``connection.ble.js``) one to one; verified against a real device.
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from .const import FADE_COLOR_TRANSITION
 
-# LMP-Header-Konstanten (aus core_ble_type.js)
+# LMP header constants (from core_ble_type.js)
 _MSG_CMD_NO_ACK = 0x00
 _MSG_CMD_WITH_ACK = 0x01
 _ENC_PRIVATE = 0x02
@@ -20,7 +20,7 @@ _LED_MODE_COLOR = 0x01
 
 
 def hsv_to_rgb(h: float, s: float, v: float) -> tuple[int, int, int]:
-    """tinycolor-kompatible HSV→RGB-Umrechnung. h[0-360], s,v[0-100]."""
+    """tinycolor-compatible HSV to RGB conversion. h[0-360], s,v[0-100]."""
     h = (h % 360) / 360.0
     s = s / 100.0
     v = v / 100.0
@@ -37,11 +37,10 @@ def hsv_to_rgb(h: float, s: float, v: float) -> tuple[int, int, int]:
 
 
 def temp_to_hs(kelvin: float) -> tuple[float, float]:
-    """Farbtemperatur -> (Hue, Sättigung) wie ``TempToHSV`` der App.
+    """Colour temperature to (hue, saturation), like the app's ``TempToHSV``.
 
-    Warmweiß entsteht bei diesen Leuchten über den *Farbweg*: ein warmer
-    Ton mit hoher Sättigung. Erst bei Sättigung 0 übernimmt der (kalte)
-    Weiß-Kanal.
+    On these lamps warm white is produced through *colour*: a warm hue at high
+    saturation. Only at saturation 0 does the (cold) white channel take over.
     """
     import math
 
@@ -84,12 +83,12 @@ def temp_to_hs(kelvin: float) -> tuple[float, float]:
 
 
 def _process_color(h: float, s: float, v: float) -> dict:
-    """processColor() für RGBW-Leuchte (color_mode COLOR, linear aus, rgbw an)."""
+    """processColor() for an RGBW lamp (color_mode COLOR, linear off, rgbw on)."""
     r, g, b = hsv_to_rgb(h, s, 100)
     total = r + g + b
     coeff = 255.0 / total if total else 1.0
     out_v = v * (s / 100.0) * coeff
-    white = (100 - s) * (v / 100.0)  # color_mode==COLOR -> ohne +0x80
+    white = (100 - s) * (v / 100.0)  # color_mode==COLOR -> without +0x80
     return {"h": h, "s": s, "v": out_v, "white": white}
 
 
@@ -97,15 +96,15 @@ def build_color_payload(index: int, onoff: bool, h: float, s: float, v: float,
                         is_group: bool = False, class_id: int = 19,
                         white: float | None = None,
                         white_mode: bool = False) -> list[int]:
-    """RGBW-Payload wie cmdFactory.build_color_control (API>=2).
+    """RGBW payload as in cmdFactory.build_color_control (API >= 2).
 
-    ``white`` (0..100) überschreibt den aus der Sättigung abgeleiteten
-    Weiß-Wert der App — nötig, wenn Home Assistant den Weiß-Kanal (RGBW)
-    explizit vorgibt.
+    ``white`` (0..100) overrides the white value the app derives from
+    saturation — needed when Home Assistant specifies the white channel
+    explicitly.
 
-    ``white_mode`` entspricht ``color_mode != COLOR_MODE`` in der App: dort
-    wird der Weiß-Wert ab API 2 um ``0x80`` erhöht — dieses Bit schaltet den
-    weißen Kanal aktiv. Ohne das Flag ignoriert die Leuchte reines Weiß.
+    ``white_mode`` corresponds to ``color_mode != COLOR_MODE`` in the app,
+    where the white value is raised by ``0x80`` from API 2 onwards. Note that
+    testing on the device showed the flag is not actually required.
     """
     pc = _process_color(h, s, v)
     if white is not None:
@@ -115,9 +114,9 @@ def build_color_payload(index: int, onoff: bool, h: float, s: float, v: float,
     op = _OP_GROUP_DATA_SET if is_group else _OP_DEVICE_DATA_SET
     idx = class_id if is_group else index
     b = [
-        0,                                              # [0] Länge (unten gesetzt)
+        0,                                              # [0] length (set below)
         op,                                             # [1] Opcode
-        idx & 0xFF,                                     # [2] Device-Index / Class-ID
+        idx & 0xFF,                                     # [2] device index / class id
         (1 if onoff else 0) + (_LED_MODE_COLOR << 4),   # [3] onoff | ledmode<<4
         int(pc["v"]) & 0xFF,                            # [4] V
         int(pc["h"]) & 0xFF,                            # [5] H low
@@ -131,7 +130,7 @@ def build_color_payload(index: int, onoff: bool, h: float, s: float, v: float,
     return b
 
 
-# Nur die Opcodes, die tatsächlich im Advertisement auftauchen.
+# Only the opcodes that actually appear in advertisements.
 _LMP_NAMES = {
     0x80: "status_ack", 0x81: "status_registration", 0x82: "status_network",
     0x83: "status_heartbeat", 0x84: "status_network_gateway_list",
@@ -148,15 +147,15 @@ def _keystream(key1: bytes, nonce: bytes) -> bytes:
 
 
 def decode_advertisement(md: bytes, key1: bytes, nonce: bytes) -> dict | None:
-    """Wertet die Linkio-Manufacturer-Daten eines Advertisements aus.
+    """Decode the Linkio manufacturer data of an advertisement.
 
-    ``md`` ist der Teil *hinter* der Company-ID, so wie HAs Bluetooth-Stack ihn
-    liefert. Der Payload ist mit demselben Verfahren wie Befehle verschlüsselt
-    (XOR mit AES-ECB über den Nonce) und durch eine XOR-Prüfsumme gesichert.
-    Rückgabe ``None``, wenn das Paket zu kurz ist oder die Prüfsumme nicht passt.
+    ``md`` is the part *after* the company id, exactly as HA's Bluetooth stack
+    delivers it. The payload uses the same encryption as commands (XOR with
+    AES-ECB over the nonce) and carries an XOR checksum. Returns ``None`` if
+    the packet is too short or the checksum does not match.
 
-    Achtung: Die Cubes senden hier ihren *Netzwerk*-Zustand — An/Aus und Farbe
-    stehen nicht darin.
+    Note: what the cubes broadcast here is their *network* state — on/off and
+    colour are not part of it.
     """
     if len(md) < 24:
         return None
@@ -195,8 +194,8 @@ def _encrypt(full16: list[int], key1: bytes, nonce: bytes) -> list[int]:
     return [full16[i] ^ keystream[i] for i in range(16)]
 
 
-#: Fehlercodes aus ``lmp_error_codes_e``; 0x39 ist undokumentiert und kommt
-#: auf Abfragen, die diese Firmware nicht bedient.
+#: Error codes from ``lmp_error_codes_e``. 0x39 is undocumented and comes back
+#: for queries this firmware does not serve.
 ACK_ERRORS = {
     0x00: "SUCCESS", 0x01: "NOT_SUPPORTED", 0x02: "INVALID_COMMAND",
     0x03: "INVALID_PARAMETER", 0x04: "INVALID_DEVICE", 0x05: "UNREGISTERED",
@@ -208,11 +207,11 @@ _OP_STATUS_ACK = 0x80
 
 
 def parse_ack(data: bytes, key1: bytes, nonce: bytes) -> tuple[int, int] | None:
-    """Wertet eine Notify-Antwort aus und liefert ``(cmd_id, fehlercode)``.
+    """Decode a notify reply into ``(cmd_id, error_code)``.
 
-    Der Cube quittiert jeden Befehl, der mit ``CMD_WITH_ACK`` gesendet wurde —
-    am Gerät verifiziert. Rückgabe ``None``, wenn das Paket keine Quittung ist
-    (etwa ein Status-Frame) oder die Prüfsumme nicht stimmt.
+    The cube acknowledges every command sent as ``CMD_WITH_ACK`` — verified on
+    the device. Returns ``None`` if the packet is not an acknowledgement (a
+    status frame, say) or the checksum does not match.
     """
     if len(data) < 20:
         return None
@@ -231,11 +230,11 @@ def parse_ack(data: bytes, key1: bytes, nonce: bytes) -> tuple[int, int] | None:
 
 def build_frame(lmp_addr: str, payload: list[int], key1: bytes, nonce: bytes,
                 cmd_id: int = 1, want_ack: bool = True) -> bytes:
-    """sendBytesCmd() Short-Frame (PRIVATE-Encryption) -> 20-Byte-GATT-Write.
+    """sendBytesCmd() short frame (PRIVATE encryption) -> 20-byte GATT write.
 
-    ``want_ack`` entspricht ``CMD_WITH_ACK`` der App: Der Cube bestätigt den
-    Befehl dann mit einem Quittungs-Frame. Nur das Nachrichtentyp-Feld im
-    Kopfbyte ändert sich dadurch, Nutzlast und Prüfsumme bleiben gleich.
+    ``want_ack`` corresponds to the app's ``CMD_WITH_ACK``: the cube then
+    confirms the command with an acknowledgement frame. Only the message-type
+    field of the header byte changes; payload and checksum stay identical.
     """
     msg_type = _MSG_CMD_WITH_ACK if want_ack else _MSG_CMD_NO_ACK
     b0 = (
@@ -244,7 +243,7 @@ def build_frame(lmp_addr: str, payload: list[int], key1: bytes, nonce: bytes,
         | (_FRAME_LMP_SHORT & 0x07)
     )
     parts = lmp_addr.split(":")
-    addr = [int(parts[-1], 16), int(parts[-2], 16)]  # letztes, dann vorletztes Byte
+    addr = [int(parts[-1], 16), int(parts[-2], 16)]  # last byte, then second-to-last
     header = [b0, cmd_id & 0xFF]
 
     pl = list(payload)

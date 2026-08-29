@@ -1,4 +1,4 @@
-"""Config-Flow für Smart & Green Cube."""
+"""Config flow for Smart & Green Cube."""
 from __future__ import annotations
 
 import logging
@@ -45,14 +45,14 @@ def _parse_hex16(value: str) -> bytes:
 
 
 class SmartGreenConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Führt durch die Einrichtung — .lap-Import oder manuelle Schlüsseleingabe."""
+    """Guides through setup — .lap import or entering keys by hand."""
 
     VERSION = 1
 
     async def async_step_bluetooth(
         self, discovery_info: BluetoothServiceInfoBleak
     ) -> ConfigFlowResult:
-        """Ein Cube wurde per BLE entdeckt -> zur normalen Einrichtung führen."""
+        """A cube was discovered over BLE -> continue with the normal setup."""
         await self.async_set_unique_id(DOMAIN)
         self._abort_if_unique_id_configured()
         return await self.async_step_user()
@@ -70,7 +70,7 @@ class SmartGreenConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_import_lap(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Konfigurationsdatei (.lap) hochladen und mit Passwort entschlüsseln."""
+        """Upload the configuration file (.lap) and decrypt it with the password."""
         errors: dict[str, str] = {}
         if user_input is not None:
             file_id = user_input["file"]
@@ -124,7 +124,7 @@ class SmartGreenConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_manual(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Schlüssel und Nonce manuell als Hex eingeben (Fallback ohne Datei)."""
+        """Enter key and nonce as hex by hand (fallback without a file)."""
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
@@ -138,7 +138,7 @@ class SmartGreenConfigFlow(ConfigFlow, domain=DOMAIN):
                     data={
                         CONF_KEY: key1.hex(),
                         CONF_NONCE: nonce.hex(),
-                        CONF_MODULES: [],  # per BLE-Scan automatisch ergänzt
+                        CONF_MODULES: [],  # filled in automatically by BLE scan
                         CONF_GROUP: None,
                     },
                 )

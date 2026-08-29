@@ -35,5 +35,18 @@
     "abort": {
       "already_configured": "Smart & Green Cube is already set up."
     }
+  },
+  "entity": {
+    "sensor": {
+      "rssi": {
+        "name": "Signal strength"
+      },
+      "last_seen": {
+        "name": "Last seen"
+      },
+      "proxy": {
+        "name": "Bluetooth proxy"
+      }
+    }
   }
 }

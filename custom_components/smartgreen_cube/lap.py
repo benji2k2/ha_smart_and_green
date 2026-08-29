@@ -1,10 +1,10 @@
-"""Entschlüsselung der Smart-&-Green-Konfigurationsdatei (``internal.config.lap``).
+"""Decryption of the Smart & Green configuration file (``internal.config.lap``).
 
-Die App (Cordova-Plugin ``linkio-secured-zip`` auf Basis von zip4j) speichert die
-Konfiguration als ZIP mit klassischer PKWARE-ZipCrypto-Verschlüsselung. Wichtig:
-zip4j schreibt ein abweichendes "Check-Byte", weshalb Pythons ``zipfile`` das
-richtige Passwort fälschlich ablehnt. Wir entschlüsseln daher von Hand und
-verifizieren über die CRC des entpackten Inhalts statt über das Check-Byte.
+The app (Cordova plugin ``linkio-secured-zip``, built on zip4j) stores the
+configuration as a ZIP with classic PKWARE ZipCrypto encryption. Importantly,
+zip4j writes a non-standard "check byte", which makes Python's ``zipfile``
+reject the correct password. We therefore decrypt by hand and verify via the
+CRC of the decompressed content instead of the check byte.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from .const import (
     MOD_SW,
 )
 
-# Standard-CRC32-Tabelle (reflektiertes Polynom 0xEDB88320) für ZipCrypto.
+# Standard CRC32 table (reflected polynomial 0xEDB88320) for ZipCrypto.
 _CRC_TABLE = []
 for _i in range(256):
     _c = _i
@@ -34,11 +34,11 @@ for _i in range(256):
 
 
 class LapError(Exception):
-    """Basisfehler beim Verarbeiten der .lap-Datei."""
+    """Base error while processing the .lap file."""
 
 
 class LapWrongPassword(LapError):
-    """Falsches Passwort (CRC des entpackten Inhalts stimmt nicht)."""
+    """Wrong password (CRC of the decompressed content does not match)."""
 
 
 def _zipcrypto_decrypt(enc: bytes, password: bytes) -> bytes:
@@ -66,30 +66,30 @@ def _zipcrypto_decrypt(enc: bytes, password: bytes) -> bytes:
 
 
 def decrypt_lap(raw: bytes, password: str) -> list[dict[str, Any]]:
-    """Entschlüsselt eine .lap-Datei und gibt die JSON-Konfiguration (Liste) zurück."""
+    """Decrypt a .lap file and return the JSON configuration (a list)."""
     if raw[:4] != b"PK\x03\x04":
-        raise LapError("Keine ZIP-/lap-Datei")
+        raise LapError("Not a ZIP/.lap file")
     (
         _sig, _ver, flags, comp, _mt, _md, crc, csize, _usize, nlen, elen,
     ) = struct.unpack("<IHHHHHIIIHH", raw[:30])
     if not (flags & 0x0001):
-        raise LapError("Datei ist nicht verschlüsselt")
+        raise LapError("File is not encrypted")
     off = 30 + nlen + elen
     enc = raw[off:off + csize]
 
     dec = _zipcrypto_decrypt(enc, password.encode())
-    body = dec[12:]  # erste 12 Byte = Verschlüsselungs-Header
+    body = dec[12:]  # first 12 bytes are the encryption header
     try:
         content = zlib.decompress(body, -15) if comp == 8 else body
     except zlib.error as err:
-        raise LapWrongPassword("Falsches Passwort") from err
+        raise LapWrongPassword("Wrong password") from err
     if (zlib.crc32(content) & 0xFFFFFFFF) != crc:
-        raise LapWrongPassword("Falsches Passwort")
+        raise LapWrongPassword("Wrong password")
 
     try:
         return json.loads(content)
     except json.JSONDecodeError as err:  # pragma: no cover
-        raise LapError("Konfiguration nicht lesbar") from err
+        raise LapError("Configuration not readable") from err
 
 
 def _as_map(config: list[dict[str, Any]]) -> dict[str, Any]:
@@ -97,18 +97,18 @@ def _as_map(config: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def extract_keys(config: list[dict[str, Any]]) -> tuple[bytes, bytes, int]:
-    """Liefert (key_crypt1, nonce, encryption_mode)."""
+    """Return (key_crypt1, nonce, encryption_mode)."""
     m = _as_map(config)
     key1 = bytes(m["keyCrypt1"])
     nonce = bytes(m["nounceAESCrypt"])
     mode = int(m.get("encryptionMode", 2))
     if len(key1) != 16 or len(nonce) != 16:
-        raise LapError("Schlüssel/Nonce haben nicht 16 Byte")
+        raise LapError("Key/nonce are not 16 bytes")
     return key1, nonce, mode
 
 
 def _version_str(raw: Any) -> str | None:
-    """[2, 9, 0, ""] -> "2.9.0"; alles Unbrauchbare -> None."""
+    """[2, 9, 0, ""] -> "2.9.0"; anything unusable -> None."""
     if not isinstance(raw, list):
         return None
     parts = [str(x) for x in raw if isinstance(x, int)]
@@ -116,7 +116,7 @@ def _version_str(raw: Any) -> str | None:
 
 
 def extract_modules(config: list[dict[str, Any]]) -> tuple[list[dict], dict | None]:
-    """Liefert (Module, Gruppe) mit Name, LMP-Adresse, Device-Index und Klasse."""
+    """Return (modules, group) with name, LMP address, device index and class."""
     m = _as_map(config)
     modules: list[dict] = []
     for key, val in m.items():
@@ -149,7 +149,7 @@ def extract_modules(config: list[dict[str, Any]]) -> tuple[list[dict], dict | No
         if key.startswith("grp_") and isinstance(val, dict):
             ident = val.get("identification", {})
             group = {
-                MOD_NAME: ident.get("name", "Alle"),
+                MOD_NAME: ident.get("name", "All"),
                 MOD_LMP: ident.get("lmp_addr", "FF:FF"),
                 MOD_INDEX: 0,
                 MOD_CLASS: ident.get("class", DEFAULT_CLASS),

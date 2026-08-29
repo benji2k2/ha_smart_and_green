@@ -1,8 +1,7 @@
-"""Diagnose-Sensoren: Signalstärke, letzter Empfang, verwendeter Proxy.
+"""Diagnostic sensors: signal strength, last seen, and the proxy in use.
 
-Alle Werte stammen aus den Advertisements der Cubes — es wird dafür keine
-Verbindung aufgebaut, die Sensoren kosten also keine Funkzeit und stören die
-Steuerung nicht.
+All values come from the cubes' advertisements — no connection is opened for
+them, so the sensors cost no radio time and never get in the way of control.
 """
 from __future__ import annotations
 
@@ -30,9 +29,10 @@ from .const import (
 from .device import build_device_info
 from .lmp import decode_advertisement
 
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
-    """Legt für jedes Modul die Diagnose-Sensoren an."""
+    """Create the diagnostic sensors for every module."""
     data = entry.data
     key = bytes.fromhex(data[CONF_KEY])
     nonce = bytes.fromhex(data[CONF_NONCE])
@@ -46,7 +46,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
 
 
 class _CubeDiagnosticSensor(SensorEntity):
-    """Gemeinsame Basis: findet das Advertisement des zugehörigen Cubes."""
+    """Common base: finds the advertisement belonging to this cube."""
 
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -59,7 +59,7 @@ class _CubeDiagnosticSensor(SensorEntity):
         self._attr_device_info = build_device_info(module)
 
     def _service_info(self):
-        """Letztes Advertisement dieses Cubes, oder None."""
+        """Most recent advertisement of this cube, or None."""
         want_name = "bulb" + self._lmp.replace(":", "").lower()
         for si in bluetooth.async_discovered_service_info(self.hass,
                                                           connectable=True):
@@ -72,9 +72,9 @@ class _CubeDiagnosticSensor(SensorEntity):
 
 
 class CubeRssiSensor(_CubeDiagnosticSensor):
-    """Signalstärke des zuletzt empfangenen Advertisements."""
+    """Signal strength of the most recent advertisement."""
 
-    _attr_name = "Signalstärke"
+    _attr_translation_key = "rssi"
     _attr_device_class = SensorDeviceClass.SIGNAL_STRENGTH
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = SIGNAL_STRENGTH_DECIBELS_MILLIWATT
@@ -98,25 +98,25 @@ class CubeRssiSensor(_CubeDiagnosticSensor):
         self._attr_available = True
         self._attr_native_value = si.rssi
 
-        # Das Advertisement traegt zusaetzlich den Netzwerkzustand des Cubes.
-        # Es enthaelt bewusst KEIN An/Aus — dafuer gibt es keinen Broadcast.
+        # The advertisement also carries the cube's network state. It
+        # deliberately does NOT carry on/off — there is no broadcast for that.
         attrs: dict[str, object] = {}
         md = si.manufacturer_data.get(COMPANY_ID)
         if md:
             decoded = decode_advertisement(bytes(md), self._key, self._nonce)
             if decoded is not None:
-                attrs["registriert"] = decoded["registered"]
-                attrs["verbunden"] = decoded["connected"]
+                attrs["registered"] = decoded["registered"]
+                attrs["connected"] = decoded["connected"]
                 attrs.update(decoded["fields"])
             else:
-                attrs["hinweis"] = "Advertisement nicht entschlüsselbar"
+                attrs["note"] = "advertisement could not be decrypted"
         self._attrs = attrs
 
 
 class CubeLastSeenSensor(_CubeDiagnosticSensor):
-    """Zeitpunkt des letzten empfangenen Advertisements."""
+    """When the last advertisement was received."""
 
-    _attr_name = "Zuletzt gesehen"
+    _attr_translation_key = "last_seen"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
 
     def __init__(self, hass, entry, module) -> None:
@@ -126,16 +126,16 @@ class CubeLastSeenSensor(_CubeDiagnosticSensor):
         si = self._service_info()
         if si is None:
             return
-        # ``si.time`` ist eine monotone Uhr, keine Wanduhr — deshalb ueber den
-        # Abstand zu jetzt zurueckrechnen.
+        # ``si.time`` is a monotonic clock, not wall time, so derive the
+        # timestamp from how long ago the advertisement arrived.
         age = max(0.0, time.monotonic() - si.time)
         self._attr_native_value = datetime.now(timezone.utc) - timedelta(seconds=age)
 
 
 class CubeSourceSensor(_CubeDiagnosticSensor):
-    """Über welchen Adapter bzw. Bluetooth-Proxy der Cube empfangen wird."""
+    """Which adapter or Bluetooth proxy currently receives this cube."""
 
-    _attr_name = "Bluetooth-Proxy"
+    _attr_translation_key = "proxy"
 
     def __init__(self, hass, entry, module) -> None:
         super().__init__(hass, entry, module, "source")

@@ -5,8 +5,8 @@
 <h1 align="center">Smart &amp; Green Cube — Home Assistant Integration</h1>
 
 <p align="center">
-  Lokale Steuerung der <b>Smart &amp; Green „Cube"</b>-Leuchten (BLE-RGBW, Linkio-LMP)
-  direkt aus Home Assistant – ohne Cloud, ohne Hersteller-Gateway.
+  Local control of <b>Smart &amp; Green "Cube"</b> lamps (BLE RGBW, Linkio LMP)
+  straight from Home Assistant — no cloud, no vendor gateway.
 </p>
 
 <p align="center">
@@ -15,156 +15,159 @@
   <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg">
 </p>
 
+<p align="center"><a href="README.de.md">Deutsche Fassung</a></p>
+
 ---
 
-Die Integration spricht das proprietäre **LMP (Linkio Mesh Protocol)** der App
-„Smart & Green – Mesh" direkt über BLE. Die nötigen Mesh-Schlüssel liest sie
-**einmalig aus dem verschlüsselten App-Export (`.lap`)** – kein Hex-Gefummel.
-Die Steuerung läuft über den Bluetooth-Adapter des HA-Hosts oder einen
-**ESPHome-Bluetooth-Proxy** in Funkreichweite der Cubes.
+This integration speaks **LMP (Linkio Mesh Protocol)**, the proprietary protocol
+behind the "Smart & Green – Mesh" app, directly over BLE. It reads the required
+mesh keys **once, from the app's encrypted export (`.lap`)** — no fiddling with
+hex strings. Control runs through the HA host's Bluetooth adapter or an
+**ESPHome Bluetooth proxy** within radio range of the cubes.
 
-> Reverse-engineered für die private Interoperabilität eigener, gekaufter Hardware.
-> Kein offizielles Produkt von Smart & Green / Linkio. Alle Marken gehören ihren Eigentümern.
+> Reverse-engineered for private interoperability with hardware I own.
+> Not an official product of Smart & Green / Linkio. All trademarks belong to
+> their respective owners.
 
 ## Features
 
-- Ein `light`-Entity pro Cube: **An/Aus, Helligkeit, Farbe (HS), Farbtemperatur**
-- **Quittierte Befehle** — der Cube bestätigt jeden Schaltvorgang, verlorene
-  werden erkannt und wiederholt
-- **Zustand übersteht Neustarts** (gespeicherter Zustand statt „alles aus")
-- Optionales Gruppen-Entity **„Alle"** — ein Broadcast erreicht über das Mesh
-  alle Cubes und braucht nur *eine* Verbindung, ist also deutlich schneller als
-  einzelnes Schalten
-- **Diagnosesensoren** je Cube: Signalstärke, zuletzt gesehen, verwendeter Proxy
-- Transparente Nutzung vorhandener **ESPHome-Bluetooth-Proxys**
-- **Auto-Discovery** der Cubes per BLE-Advertisement (Company-ID `0x04AA`)
-- Schlüssel-Import direkt aus dem `.lap`-Export der App
+- One `light` entity per cube: **on/off, brightness, colour (HS), colour temperature**
+- **Acknowledged commands** — the cube confirms every switch; lost commands are
+  detected and retried
+- **State survives restarts** (stored state instead of "everything off")
+- Optional **"All" group entity** — one broadcast reaches every cube through the
+  mesh and needs only *one* connection, so it is markedly faster than switching
+  each cube in turn
+- **Diagnostic sensors** per cube: signal strength, last seen, proxy in use
+- Transparent use of existing **ESPHome Bluetooth proxies**
+- **Auto-discovery** via BLE advertisement (company id `0x04AA`)
+- Key import straight from the app's `.lap` export
 
-### Warum der erste Druck lange dauert
+## Why the first press takes a while
 
-Die Cubes werben nur etwa **alle 50 Sekunden** (im Feld gemessen). Eine
-BLE-Verbindung kann erst beginnen, wenn der Proxy ein solches Advertisement
-gehört hat — ein kalter Verbindungsaufbau wartet daher im Mittel eine halbe,
-schlimmstenfalls eine ganze Werbeperiode. Das ist Stromsparen in der Firmware
-und lässt sich nicht wegprogrammieren.
+The cubes advertise only about **every 50 seconds** (measured in the field). A
+BLE connection cannot begin until the proxy has heard such an advertisement, so
+a cold connect waits half an advertising period on average and a full one at
+worst. That is firmware power saving and cannot be programmed away.
 
-Was die Integration tut, damit es nicht stört:
+What the integration does so it does not get in the way:
 
-- Die Anzeige schaltet **sofort** um, gesendet wird im Hintergrund — man muss
-  nicht mehrfach drücken. Bestätigt der Cube den Befehl nicht, wird die Anzeige
-  nachträglich zurückgesetzt.
-- Die Verbindung bleibt **zwei Minuten** offen, damit Folgebefehle das
-  Werbeintervall nicht erneut bezahlen.
-- Schnelle Änderungen (Ziehen am Regler) werden zusammengefasst.
+- The display switches **immediately** and the command goes out in the
+  background — no need to press twice. If the cube does not acknowledge it, the
+  display is rolled back afterwards.
+- The connection stays open for **two minutes**, so follow-up commands do not
+  pay the advertising interval again.
+- LMP is a mesh, so **any** open connection can relay a command to **any** cube.
+  If one cube is already connected, commands for the other go through it and
+  skip the wait entirely — this is how the vendor app works too.
+- Rapid changes (dragging a slider) are coalesced into one send.
 
-### Reichweite beachten
+## Mind the range
 
-Die Cubes sind BLE-Geräte mit kleiner Antenne. Unter **−75 dBm** wird die
-Verbindung unzuverlässig: Sie kommt oft noch zustande, bricht dann aber während
-der Service-Discovery ab — das sieht wie ein sporadischer Softwarefehler aus,
-ist aber schlicht Funkreichweite. Fünf Meter durch eine massive Wand reichen
-erfahrungsgemäß **nicht**.
+The cubes are BLE devices with a small antenna. Below **−75 dBm** the link
+becomes unreliable: the connection often still succeeds but then drops during
+service discovery — which looks like a sporadic software fault when it is
+really radio range. Five metres through a solid wall is, in practice, **not**
+enough.
 
-Der Sensor **Signalstärke** zeigt den aktuellen Wert, und unter −75 dBm warnt
-die Integration im Protokoll. Abhilfe ist immer ein Bluetooth-Proxy näher am
-Cube — Home Assistant wählt automatisch den mit dem besten Empfang.
+The **signal strength** sensor shows the current value, and below −75 dBm the
+integration warns in the log. The remedy is always a Bluetooth proxy closer to
+the cube — Home Assistant automatically picks the one with the best reception.
 
-### Was es (noch) nicht gibt
+## What it cannot do
 
-- **Kein Rücklesen von An/Aus und Farbe.** Der Zustand steht weder im
-  Advertisement (dort nur der Netzwerkzustand), noch beantwortet die Firmware
-  eine Abfrage: `DEVICE_DATA_GET` (0x42) wird mit einem undokumentierten Code
-  abgelehnt. Die App bekommt den Zustand offenbar als Ereignis
-  (`LMP_EVENT_DEVICE_DATA`, 0x92) — im Test war keines auszulösen. Der Zustand
-  in Home Assistant ist deshalb *optimistic* (`assumed_state`).
+- **No readback of on/off and colour.** The state is neither in the
+  advertisement (which carries only network state) nor available on request:
+  `DEVICE_DATA_GET` (0x42) is rejected with an undocumented code, regardless of
+  addressing, time window, or device versus class id. The app appears to
+  receive state as an event (`LMP_EVENT_DEVICE_DATA`, 0x92), and none could be
+  provoked in testing. State in Home Assistant is therefore *optimistic*
+  (`assumed_state`).
 
-  Dafür wird jeder Befehl **quittiert**: Der Cube bestätigt mit `STATUS_ACK`,
-  ob er ihn ausgeführt hat. Ein verlorener Befehl fällt damit sofort auf und
-  wird wiederholt, statt still zu scheitern.
-- **Kein Akkustand.** Obwohl es Akkuleuchten sind, beantwortet die Firmware die
-  Abfrage nicht: `LMP_COMMAND_MODULE_BATTERY_STATUS_GET` (0x2D) wird mit
-  `LMP_ERR_NOT_SUPPORTED` quittiert, `0x2C` bleibt unbeantwortet, und die
-  Antwort auf `MODULE_INFO_GET` enthält kein Akkufeld. Am Gerät geprüft mit
-  Firmware 2.9.0 / API 4.
+  Commands are **acknowledged** though: the cube confirms with `STATUS_ACK`
+  whether it carried one out. A lost command is noticed immediately and
+  retried, instead of failing silently.
+- **No battery level.** Despite being battery lamps, the firmware does not
+  answer: `LMP_COMMAND_MODULE_BATTERY_STATUS_GET` (0x2D) is acknowledged with
+  `LMP_ERR_NOT_SUPPORTED`, `0x2C` goes unanswered, and the `MODULE_INFO_GET`
+  reply contains no battery field. Checked on device with firmware 2.9.0 /
+  API 4.
 
-## Voraussetzungen
+## Requirements
 
-- Home Assistant **2024.4+** mit aktiver **Bluetooth**-Integration
-- Bluetooth-Adapter am HA-Host **oder** ein ESPHome-Gerät mit
-  `bluetooth_proxy` (aktive Verbindungen) in Reichweite der Cubes
-- Cubes im PRIVATE-Key-Modus (Standard der App)
+- Home Assistant **2024.4+** with the **Bluetooth** integration enabled
+- A Bluetooth adapter on the HA host **or** an ESPHome device with
+  `bluetooth_proxy` (active connections) within range of the cubes
+- Cubes in PRIVATE key mode (the app's default)
 
 ## Installation
 
-**Über HACS (Custom Repository):**
+**Via HACS (custom repository):**
 
-1. HACS → Integrationen → ⋮ → *Benutzerdefinierte Repositories*
-2. `https://github.com/benji2k2/ha_smart_and_green` als Kategorie **Integration** hinzufügen
-3. „Smart & Green Cube" installieren → Home Assistant neu starten
+1. HACS → Integrations → ⋮ → *Custom repositories*
+2. Add `https://github.com/benji2k2/ha_smart_and_green` as category **Integration**
+3. Install "Smart & Green Cube" → restart Home Assistant
 
-**Manuell:** Ordner `custom_components/smartgreen_cube/` nach
-`<config>/custom_components/` kopieren und HA neu starten.
+**Manually:** copy the `custom_components/smartgreen_cube/` folder into
+`<config>/custom_components/` and restart Home Assistant.
 
-## Einrichtung
+## Setup
 
-1. In der **Smart-&-Green-App** die Konfiguration exportieren
-   (erzeugt eine passwortgeschützte `.lap`-Datei) und aufs HA-Gerät bringen.
-2. In HA: *Einstellungen → Geräte & Dienste → Integration hinzufügen →
-   „Smart & Green Cube"*.
-3. **„Konfigurationsdatei (.lap) importieren"** wählen, Datei hochladen und das
-   **Export-Passwort** eingeben.
-4. Die Integration entschlüsselt die Datei, liest Schlüssel + Cube-/Gruppenliste
-   und legt die Lampen automatisch an.
+1. In the **Smart & Green app**, export the configuration (this produces a
+   password-protected `.lap` file) and transfer it to the HA machine.
+2. In HA: *Settings → Devices & Services → Add integration → "Smart & Green Cube"*.
+3. Choose **"Import configuration file (.lap)"**, upload the file and enter the
+   **export password**.
+4. The integration decrypts the file, reads the keys plus the cube and group
+   list, and creates the lights automatically.
 
-Kein Export zur Hand? Über **„Schlüssel manuell eingeben"** lassen sich
-`keyCrypt1` und `nounceAESCrypt` (je 16 Byte Hex) direkt eintragen; die Cubes
-werden dann per BLE-Scan gefunden.
+No export at hand? **"Enter keys manually"** takes `keyCrypt1` and
+`nounceAESCrypt` (16 bytes hex each) directly; the cubes are then found by BLE
+scan.
 
-## Wie es funktioniert (Kurzfassung)
+## How it works (short version)
 
-Kein Bluetooth-SIG-Mesh, sondern **LMP** von Linkio SAS. Steuer-Frames gehen als
-GATT-Write auf Characteristic `00005002-0000-1000-8000-00805f9b34fb`
-(Service `41c15000-…`). Der 16-Byte-Payload wird mit
-`payload XOR AES128-ECB(keyCrypt1, nonce)` verschlüsselt. Das Motiv des
-Integrations-Icons stammt aus der Original-App (RGBW-„Cube").
+Not Bluetooth SIG Mesh, but **LMP** by Linkio SAS. Control frames are GATT
+writes to characteristic `00005002-0000-1000-8000-00805f9b34fb` (service
+`41c15000-…`). The 16-byte payload is encrypted as
+`payload XOR AES128-ECB(keyCrypt1, nonce)`. The integration icon uses the motif
+from the original app.
 
 ## Status
 
-Protokoll, Verschlüsselung, Frame-Format und Advertisement-Aufbau sind **am
-echten Gerät verifiziert**, ebenso die Steuerung im Alltag (An/Aus, Helligkeit,
-Farbe, Farbtemperatur) über einen ESPHome-Proxy und der Gruppen-Broadcast an
-`FF:FF`. Der Zustand ist *optimistic* — siehe „Was es (noch) nicht gibt".
-Rückmeldungen/Issues willkommen.
+Protocol, encryption, frame format and advertisement layout are **verified on a
+real device**, as is day-to-day control (on/off, brightness, colour, colour
+temperature) through an ESPHome proxy, and the group broadcast to `FF:FF`.
+State is *optimistic* — see "What it cannot do". Feedback and issues welcome.
 
-## Sicherheit / Datenschutz
+## Security and privacy
 
-Die `.lap`-Datei und der extrahierte Schlüssel (`keyCrypt1` + `nonce`) sind
-**Geheimnisse deiner Installation**. Sie werden **nie** in dieses Repository
-committed (siehe `.gitignore`).
+The `.lap` file and the extracted key (`keyCrypt1` + nonce) are **secrets of
+your installation**. They are never committed to this repository (see
+`.gitignore`).
 
-**Speicherung in Home Assistant:** Der Schlüssel wird – wie alle
-Integrations-Geheimnisse in HA (WLAN-Passwörter, Tokens, API-Keys) – in der
-Config-Entry unter `<config>/.storage/core.config_entries` als **Klartext-JSON**
-abgelegt. Home Assistant verschlüsselt diese Daten **nicht** at-rest; das
-Bedrohungsmodell setzt einen vertrauenswürdigen Host voraus.
+**How Home Assistant stores it:** like every integration secret in HA (Wi-Fi
+passwords, tokens, API keys), the key is written to the config entry in
+`<config>/.storage/core.config_entries` as **plaintext JSON**. Home Assistant
+does **not** encrypt this at rest; its threat model assumes a trusted host.
 
-Praktisch bedeutet das:
+In practice that means:
 
-- Wer Dateisystem-Zugriff auf den HA-Host hat, kann den Schlüssel lesen.
-- Der Schlüssel landet in **Backups** – aktiviere daher **verschlüsselte Backups**.
-- Der Schlüssel wird nie geloggt und in **Diagnose-Downloads maskiert**
+- Anyone with filesystem access to the HA host can read the key.
+- The key ends up in **backups** — so enable **encrypted backups**.
+- The key is never logged and is **redacted in diagnostics downloads**
   (`diagnostics.py`).
 
-Einordnung: Es handelt sich um ein **lokales BLE-Steuergeheimnis** – missbrauchbar
-nur in Funkreichweite bzw. über dein Proxy-Netz, nicht als Cloud-Zugang. Derselbe
-Schlüssel liegt ohnehin bereits im App-Export, auf dem Smartphone und in den Cubes.
+For perspective: this is a **local BLE control secret**. It can only be abused
+within radio range or through your proxy network, and it is not cloud access.
+The same key already exists in the app export, on the phone, and in the cubes.
 
 ## Icons
 
-Das Integrations-Icon liegt im Repo unter
-`custom_components/smartgreen_cube/brand/` (`icon.png` 256px, `icon@2x.png` 512px,
-`logo.png`). Das Motiv ist das Herstellerlogo aus der Original-App.
+The integration icon lives in `custom_components/smartgreen_cube/brand/`
+(`icon.png` 256px, `icon@2x.png` 512px, `logo.png`). The motif is the vendor
+logo from the original app.
 
-## Lizenz
+## Licence
 
-MIT – siehe [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

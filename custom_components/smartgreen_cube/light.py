@@ -1,4 +1,4 @@
-"""Light-Plattform für Smart & Green Cube."""
+"""Light platform for Smart & Green Cube."""
 from __future__ import annotations
 
 import asyncio
@@ -46,42 +46,42 @@ from .lmp import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Verbindung nach dieser Zeit ohne Befehl schließen. Grosszuegig, weil ein
-# neuer Aufbau auf das naechste Advertisement warten muss (~50 s) — jede
-# vorschnell getrennte Verbindung kostet beim naechsten Druck genau das.
-# Nicht unbegrenzt, damit die Hersteller-App wieder an die Cubes kommt.
+# Close the connection after this long without a command. Generous, because
+# setting one up again has to wait for the next advertisement (~50s) — every
+# prematurely dropped connection costs exactly that on the next press. Not
+# unlimited, so the vendor app can still reach the cubes.
 IDLE_DISCONNECT = 120.0
 
-# Die Cubes werben nur etwa alle 50 s (im Feld gemessen). Ein Proxy kann eine
-# Verbindung erst beginnen, wenn er ein Advertisement gehoert hat — die Geduld
-# muss daher ueber einem vollen Werbeintervall liegen. Da das Senden im
-# Hintergrund laeuft, blockiert die Wartezeit die Oberflaeche nicht.
-DEVICE_WAIT_TRIES = 30     # Versuche, ein verbindbares Gerät zu bekommen
-DEVICE_WAIT_DELAY = 2.0    # Sekunden zwischen den Versuchen
-CONNECT_ATTEMPTS = 5       # Verbindungsversuche von bleak-retry-connector
-SEND_ATTEMPTS = 3          # komplette Anläufe (inkl. Neuverbinden) pro Befehl
-RETRY_BACKOFF = 0.4        # Sekunden Pause zwischen den Anläufen
+# The cubes advertise only about every 50s (measured in the field). A proxy
+# cannot start a connection before it has heard an advertisement, so our
+# patience has to exceed a full advertising interval. Sending runs in the
+# background, so the wait never blocks the UI.
+DEVICE_WAIT_TRIES = 30     # attempts to obtain a connectable device
+DEVICE_WAIT_DELAY = 2.0    # seconds between attempts
+CONNECT_ATTEMPTS = 5       # connection attempts by bleak-retry-connector
+SEND_ATTEMPTS = 3          # full attempts (including reconnect) per command
+RETRY_BACKOFF = 0.4        # seconds to wait between attempts
 
-# Ab dieser Signalstärke wird der Link unzuverlässig: die Verbindung kommt oft
-# noch zustande, bricht dann aber während der Service-Discovery ab.
+# Below this signal strength the link becomes unreliable: the connection often
+# still succeeds, but then drops during service discovery.
 WEAK_RSSI = -75
 
-# So lange warten wir auf die Quittung des Cubes. Am Geraet kam sie stets
-# innerhalb von Millisekunden; grosszuegig gewaehlt fuer schwache Verbindungen.
+# How long we wait for the cube's acknowledgement. On the device it always
+# arrived within milliseconds; generous here for weak connections.
 ACK_TIMEOUT = 3.0
 
-# Gruppen-Broadcasts bleiben unquittiert, deshalb mehrfach senden.
+# Group broadcasts are never acknowledged, so send them more than once.
 GROUP_REPEATS = 3
 GROUP_REPEAT_GAP = 0.2
 
 _LOCKS: dict[str, asyncio.Lock] = {}
-# Offene Quittungen: mac -> cmd_id -> Future
+# Pending acknowledgements: mac -> cmd_id -> future
 _ACK_WAITERS: dict[str, dict[int, asyncio.Future]] = {}
-# Auf welchen Verbindungen wir Quittungen tatsaechlich empfangen koennen
+# Connections on which we can actually receive acknowledgements
 _ACK_ACTIVE: dict[str, bool] = {}
 _CLIENTS: dict[str, Any] = {}
 _IDLE_TASKS: dict[str, asyncio.Task] = {}
-# Einmal aufgelöste BLE-Adressen; Cubes werben nach dem Verbinden nicht weiter.
+# Resolved BLE addresses; cubes stop advertising once connected.
 _MAC_CACHE: dict[str, str] = {}
 
 
@@ -90,12 +90,12 @@ def _lock_for(mac: str) -> asyncio.Lock:
 
 
 def _adv_name_for(lmp: str) -> str:
-    """'13:40' -> 'bulb1340' (Advertising-Name der Cubes)."""
+    """'13:40' -> 'bulb1340' (the cubes' advertising name)."""
     return "bulb" + lmp.replace(":", "").lower()
 
 
 def _resolve_mac(hass: HomeAssistant, lmp: str) -> str | None:
-    """BLE-Adresse eines Moduls über Adv-Name / Hersteller-Daten finden."""
+    """Find a module's BLE address via advertising name or manufacturer data."""
     if (cached := _MAC_CACHE.get(lmp)) is not None:
         return cached
     want_name = _adv_name_for(lmp)
@@ -113,7 +113,7 @@ def _resolve_mac(hass: HomeAssistant, lmp: str) -> str | None:
 
 
 def _discover_modules(hass: HomeAssistant) -> list[dict]:
-    """Modulliste rein aus BLE-Advertisements (Fallback ohne .lap)."""
+    """Module list purely from BLE advertisements (fallback without .lap)."""
     seen: dict[str, dict] = {}
     for si in bluetooth.async_discovered_service_info(hass, connectable=True):
         md = si.manufacturer_data.get(COMPANY_ID)
@@ -136,13 +136,13 @@ def _discover_modules(hass: HomeAssistant) -> list[dict]:
 
 
 async def _release_other_clients(keep: str) -> None:
-    """Trennt gehaltene Verbindungen zu *anderen* Cubes.
+    """Drop held connections to *other* cubes.
 
-    Ein ESP32-Proxy hat nur wenige Verbindungsslots. Sind sie belegt, scheitert
-    der naechste Verbindungsaufbau — dann geben wir hier Platz. Aufgerufen wird
-    das erst *nach* einem Fehlschlag: vorsorglich zu trennen wuerde bei freien
-    Slots nur schaden, weil jeder neue Aufbau auf das naechste Advertisement
-    des Cubes warten muss (~50 s).
+    An ESP32 proxy has only a few connection slots. If they are all taken the
+    next connection attempt fails, and this makes room. It is called only
+    *after* such a failure: releasing pre-emptively would only hurt when slots
+    are free, because every new connection has to wait for the cube's next
+    advertisement (~50s).
     """
     for other in [m for m in _CLIENTS if m != keep]:
         if (task := _IDLE_TASKS.pop(other, None)) is not None:
@@ -150,7 +150,7 @@ async def _release_other_clients(keep: str) -> None:
         _forget_connection(other)
         client = _CLIENTS.pop(other, None)
         if client is not None and client.is_connected:
-            _LOGGER.debug("Gebe Verbindung zu %s frei (Wechsel auf %s)", other, keep)
+            _LOGGER.debug("Releasing connection to %s (switching to %s)", other, keep)
             try:
                 await client.disconnect()
             except Exception:  # noqa: BLE001
@@ -158,7 +158,7 @@ async def _release_other_clients(keep: str) -> None:
 
 
 def _schedule_idle_disconnect(mac: str) -> None:
-    """Trennt die Verbindung, wenn eine Weile kein Befehl mehr kam."""
+    """Close the connection once no command has arrived for a while."""
     if (old := _IDLE_TASKS.pop(mac, None)) is not None:
         old.cancel()
 
@@ -179,7 +179,7 @@ def _schedule_idle_disconnect(mac: str) -> None:
 
 
 def _forget_connection(mac: str) -> None:
-    """Verwirft Quittungs-Zustand einer nicht mehr bestehenden Verbindung."""
+    """Discard acknowledgement state of a connection that no longer exists."""
     _ACK_ACTIVE.pop(mac, None)
     for waiter in _ACK_WAITERS.pop(mac, {}).values():
         if not waiter.done():
@@ -201,7 +201,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Legt die Cube-Lampen an."""
+    """Create the cube lights."""
     key = bytes.fromhex(entry.data[CONF_KEY])
     nonce = bytes.fromhex(entry.data[CONF_NONCE])
     modules: list[dict] = list(entry.data.get(CONF_MODULES) or [])
@@ -224,12 +224,12 @@ async def async_setup_entry(
 
 
 class SmartGreenCubeLight(LightEntity, RestoreEntity):
-    """Eine Cube-Leuchte (oder die Gruppe 'Alle').
+    """A single cube light, or the "all" group.
 
-    Das Gerät kennt HSV plus einen Weiß-Kanal, den die Firmware aus der
-    Sättigung ableitet: hohe Sättigung = Farbe, Sättigung 0 = (kaltes) Weiß.
-    Warmweiß entsteht über einen warmen Farbton — deshalb Farbtemperatur
-    zusätzlich als eigener Modus.
+    The device speaks HSV plus a white channel that the firmware derives from
+    saturation: high saturation means colour, saturation 0 means (cold) white.
+    Warm white is produced through a warm hue, which is why colour temperature
+    exists as a separate mode.
     """
 
     _attr_has_entity_name = False
@@ -266,7 +266,7 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         suffix = f"group_{self._lmp}" if is_group else self._lmp
         self._attr_unique_id = f"{entry.entry_id}_{suffix}"
 
-        # Optimistischer Startzustand: warmweiß, volle Helligkeit.
+        # Optimistic initial state: warm white at full brightness.
         self._attr_is_on = False
         self._attr_brightness = 255
         self._attr_color_mode = ColorMode.COLOR_TEMP
@@ -281,12 +281,12 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         return self._cmd_id or 1
 
     def _target_lmps(self) -> list[str]:
-        """Kandidaten, über die gesendet wird.
+        """Candidates to send through.
 
-        Ein Gruppen-Broadcast an FF:FF erreicht über das Mesh alle Cubes — es
-        genügt also *ein* Cube als Einstiegspunkt, und wir bezahlen das
-        Werbeintervall nur einmal. Bevorzugt nehmen wir einen, zu dem die
-        Verbindung schon steht: dann entfällt die Wartezeit ganz.
+        A group broadcast to FF:FF reaches every cube through the mesh, so
+        *one* cube suffices as the entry point and we pay the advertising
+        interval only once. We prefer one we are already connected to, which
+        removes the wait entirely.
         """
         if not self._is_group:
             return [self._lmp]
@@ -295,7 +295,7 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         return connected + [lmp for lmp in self._members if lmp not in connected]
 
     def _build_frame(self) -> tuple[bytes, int]:
-        """Baut das LMP-Frame aus dem gewünschten Zustand; liefert (Frame, cmd_id)."""
+        """Build the LMP frame from the desired state; returns (frame, cmd_id)."""
         if self._attr_color_mode == ColorMode.COLOR_TEMP:
             h, s = temp_to_hs(self._attr_color_temp_kelvin or 2700)
         else:
@@ -308,20 +308,20 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
             self._index, self._attr_is_on, h, s, v,
             is_group=self._is_group, class_id=self._class,
         )
-        # Gruppen-Broadcasts werden nicht quittiert — es gäbe keinen eindeutigen
-        # Absender. Für einzelne Cubes lassen wir bestätigen.
+        # Group broadcasts are not acknowledged — there would be no single
+        # sender to answer. Individual cubes do acknowledge.
         cmd_id = self._next_cmd_id()
         frame = build_frame(self._lmp, payload, self._key, self._nonce,
                             cmd_id=cmd_id, want_ack=not self._is_group)
         return frame, cmd_id
 
     async def _acquire_device(self, mac: str) -> Any:
-        """Wartet geduldig auf ein verbindbares Gerät.
+        """Wait patiently for a connectable device.
 
-        Die Cubes werben nur periodisch. Direkt nach dem Start (oder wenn eine
-        Weile kein Befehl kam) hat Home Assistant oft noch kein frisches
-        Advertisement — dann gibt es kurzzeitig keinen verbindbaren Pfad. Statt
-        sofort aufzugeben, warten wir ein paar Werbeintervalle ab.
+        The cubes advertise only periodically. Right after startup (or after an
+        idle spell) Home Assistant often has no fresh advertisement, and then
+        there is briefly no connectable path. Rather than giving up at once, we
+        wait out an advertising interval.
         """
         for attempt in range(DEVICE_WAIT_TRIES):
             device = bluetooth.async_ble_device_from_address(
@@ -330,16 +330,16 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
             if device is not None:
                 return device
             if attempt == 0:
-                _LOGGER.debug("%s: warte auf Advertisement von %s",
+                _LOGGER.debug("%s: waiting for an advertisement from %s",
                               self._attr_name, mac)
             await asyncio.sleep(DEVICE_WAIT_DELAY)
         return None
 
     async def _write_once(self, mac: str, frame: bytes, cmd_id: int,
                           expect_ack: bool) -> None:
-        """Schreibt ein Frame und wartet auf die Quittung des Cubes.
+        """Write a frame and wait for the cube to acknowledge it.
 
-        Hält die Verbindung für Folgebefehle offen.
+        Keeps the connection open for follow-up commands.
         """
         client = _CLIENTS.get(mac)
         fresh = False
@@ -347,7 +347,7 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
             ble_device = await self._acquire_device(mac)
             if ble_device is None:
                 raise RuntimeError(
-                    f"BLE-Gerät {mac} meldet sich nicht (kein Advertisement)"
+                    f"BLE device {mac} is not responding (no advertisement)"
                 )
             try:
                 client = await establish_connection(
@@ -355,13 +355,12 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                     max_attempts=CONNECT_ATTEMPTS,
                 )
             except Exception:  # noqa: BLE001
-                # Moegliche Ursache: alle Verbindungsslots des Proxys belegt.
-                # Erst dann geben wir den anderen Cube frei — vorsorglich zu
-                # trennen wuerde bei freien Slots nur unnoetig Zeit kosten,
-                # weil der naechste Aufbau wieder ein Werbeintervall wartet.
+                # Likely cause: all of the proxy's connection slots are in
+                # use. Only now do we release the other cube — dropping it
+                # pre-emptively would waste time when slots are free, since
+                # the next connection waits out another advertising interval.
                 if any(m != mac for m in _CLIENTS):
-                    _LOGGER.debug("%s: Verbindungsaufbau fehlgeschlagen, gebe "
-                                  "andere Cubes frei", self._attr_name)
+                    _LOGGER.debug("%s: connection failed, releasing other cubes", self._attr_name)
                     await _release_other_clients(mac)
                     client = await establish_connection(
                         BleakClientWithServiceCache, ble_device,
@@ -378,24 +377,23 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
             waiter = asyncio.get_running_loop().create_future()
             _ACK_WAITERS.setdefault(mac, {})[cmd_id] = waiter
 
-        # "Write without response" ist fire-and-forget: der Proxy quittiert den
-        # Aufruf sofort, auch wenn das Frame den Cube nie erreicht — ein Fehler
-        # bleibt dann unsichtbar und wir melden faelschlich Erfolg. Wo die
-        # Characteristic quittierte Writes unterstuetzt, nutzen wir die.
+        # "Write without response" is fire-and-forget: the proxy acknowledges
+        # the call immediately even if the frame never reaches the cube, so a
+        # failure stays invisible and we would report false success. Where the
+        # characteristic supports acknowledged writes, we use them.
         char = client.services.get_characteristic(CHAR_UUID)
         acked = char is not None and "write" in getattr(char, "properties", ())
         target = char if char is not None else CHAR_UUID
         if fresh:
-            _LOGGER.debug("%s: Write-Modus %s", self._attr_name,
-                          "mit Quittung" if acked else "ohne Quittung")
+            _LOGGER.debug("%s: write mode %s", self._attr_name,
+                          "acknowledged" if acked else "unacknowledged")
 
         try:
             await client.write_gatt_char(target, frame, response=acked)
 
-            # Direkt nach einem frischen Verbindungsaufbau verschluckt das
-            # Modul den ersten Write gelegentlich — dann einmal nachlegen.
-            # Die Wiederholung traegt dieselbe cmd_id, der Cube quittiert sie
-            # also unter derselben Nummer.
+            # Right after a fresh connection the module occasionally swallows
+            # the first write, so send it once more. The repeat carries the
+            # same cmd_id, so the cube acknowledges it under the same number.
             if fresh:
                 await asyncio.sleep(0.12)
                 try:
@@ -403,10 +401,10 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                 except Exception:  # noqa: BLE001
                     pass
 
-            # Gruppen-Broadcasts werden nicht quittiert (an FF:FF gibt es
-            # keinen eindeutigen Absender). Ein verlorenes Paket faellt daher
-            # niemandem auf — im Feld erwischte ein erster Versuch nur einen
-            # von zwei Cubes. Deshalb hier bewusst mehrfach senden.
+            # Group broadcasts are not acknowledged (FF:FF has no single
+            # sender to answer), so a lost packet goes unnoticed — in the field
+            # a first attempt reached only one of two cubes. Hence sending
+            # deliberately more than once.
             if not expect_ack:
                 for _ in range(GROUP_REPEATS - 1):
                     await asyncio.sleep(GROUP_REPEAT_GAP)
@@ -421,11 +419,11 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                     code = await asyncio.wait_for(waiter, ACK_TIMEOUT)
                 except asyncio.TimeoutError as err:
                     raise RuntimeError(
-                        "Cube hat den Befehl nicht bestätigt"
+                        "cube did not acknowledge the command"
                     ) from err
                 if code != 0:
                     raise RuntimeError(
-                        f"Cube meldet Fehler {ACK_ERRORS.get(code, code)}"
+                        f"cube reports error {ACK_ERRORS.get(code, code)}"
                     )
         finally:
             if waiter is not None:
@@ -434,10 +432,10 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         _schedule_idle_disconnect(mac)
 
     async def _start_ack_listener(self, mac: str, client: Any) -> None:
-        """Abonniert die Notify-Characteristic, um Quittungen zu empfangen.
+        """Subscribe to the notify characteristic to receive acknowledgements.
 
-        Schlaegt das fehl, laeuft alles weiter wie bisher — dann warten wir
-        eben nicht auf eine Bestaetigung, statt den Befehl scheitern zu lassen.
+        If that fails everything carries on as before: we simply do not wait
+        for confirmation, rather than failing the command.
         """
         key, nonce = self._key, self._nonce
 
@@ -455,57 +453,79 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
             _ACK_ACTIVE[mac] = True
         except Exception as err:  # noqa: BLE001
             _ACK_ACTIVE[mac] = False
-            _LOGGER.debug("%s: keine Quittungen verfügbar (%s)",
+            _LOGGER.debug("%s: acknowledgements unavailable (%s)",
                           self._attr_name, err)
 
     def _log_link_quality(self, mac: str) -> None:
-        """Protokolliert die Signalstärke und warnt bei schwachem Link.
+        """Log the signal strength and warn about a weak link.
 
-        Ein Cube am Rand der Reichweite verbindet sich zwar noch, bricht aber
-        gern mitten in der Service-Discovery oder beim Schreiben ab. Das sieht
-        nach einem sporadischen Softwarefehler aus, ist aber Funkreichweite —
-        deshalb steht der Wert im Log, statt dass man ihn suchen muss.
+        A cube at the edge of range still connects, but tends to drop in the
+        middle of service discovery or while writing. That looks like a
+        sporadic software fault when it is really radio range — so the value
+        goes into the log instead of having to be hunted down.
         """
         info = bluetooth.async_last_service_info(self.hass, mac, connectable=True)
         if info is None:
             return
         if info.rssi <= WEAK_RSSI:
             _LOGGER.warning(
-                "%s: schwaches Signal (%d dBm über %s). Unter %d dBm brechen "
-                "Verbindungen häufig ab — einen Bluetooth-Proxy näher stellen.",
+                "%s: weak signal (%d dBm via %s). Below %d dBm connections "
+                "drop frequently — move a Bluetooth proxy closer.",
                 self._attr_name, info.rssi, info.source, WEAK_RSSI)
         else:
-            _LOGGER.debug("%s: Signal %d dBm über %s",
+            _LOGGER.debug("%s: signal %d dBm via %s",
                           self._attr_name, info.rssi, info.source)
 
-    async def _send(self) -> None:
-        """Sendet den aktuellen Zustand; probiert alle erreichbaren Module."""
-        frame, cmd_id = self._build_frame()
-        _LOGGER.debug("%s: sende %s", self._attr_name, frame.hex(" "))
+    def _routes(self) -> list[tuple[str, str | None]]:
+        """Connections to try, best first, as (mac, lmp_for_cache_reset).
 
-        last_err: Exception | None = None
+        LMP is a mesh: the frame carries its destination address, so *any*
+        connected cube can relay it to the target — that is exactly how the
+        vendor app works (it holds one connection and addresses every module
+        through it). An open connection is therefore worth far more than a
+        matching one, because reaching a cube directly means waiting out its
+        advertising interval (~50s) first.
+
+        A relay that does not reach the target simply goes unacknowledged, and
+        we fall through to connecting to the cube itself.
+        """
+        routes: list[tuple[str, str | None]] = [
+            (mac, None) for mac, client in _CLIENTS.items()
+            if getattr(client, "is_connected", False)
+        ]
         for lmp in self._target_lmps():
             mac = _resolve_mac(self.hass, lmp)
             if mac is None:
-                _LOGGER.warning("%s: keine BLE-Adresse für %s gefunden",
+                _LOGGER.warning("%s: no BLE address found for %s",
                                 self._attr_name, lmp)
                 continue
+            if not any(mac == known for known, _ in routes):
+                routes.append((mac, lmp))
+        return routes
+
+    async def _send(self) -> None:
+        """Send the current state over the best available route."""
+        frame, cmd_id = self._build_frame()
+        _LOGGER.debug("%s: sending %s", self._attr_name, frame.hex(" "))
+
+        last_err: Exception | None = None
+        for mac, lmp in self._routes():
             self._log_link_quality(mac)
             async with _lock_for(mac):
                 for attempt in range(1, SEND_ATTEMPTS + 1):
                     try:
                         await self._write_once(mac, frame, cmd_id,
                                               expect_ack=not self._is_group)
-                        _LOGGER.debug("%s: Frame gesendet (Versuch %d, %s)",
+                        _LOGGER.debug("%s: frame sent (attempt %d, %s)",
                                       self._attr_name, attempt, mac)
                         return
                     except Exception as err:  # noqa: BLE001
                         last_err = err
-                        _LOGGER.warning("%s: Versuch %d/%d über %s fehlgeschlagen: %s",
+                        _LOGGER.warning("%s: attempt %d/%d via %s failed: %s",
                                         self._attr_name, attempt, SEND_ATTEMPTS,
                                         mac, err)
                         await _drop_client(mac)
-                        if attempt == 1:
+                        if attempt == 1 and lmp is not None:
                             _MAC_CACHE.pop(lmp, None)
                             if (mac2 := _resolve_mac(self.hass, lmp)) and mac2 != mac:
                                 mac = mac2
@@ -514,24 +534,23 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
 
         if last_err is not None:
             raise HomeAssistantError(
-                f"{self._attr_name}: Befehl fehlgeschlagen ({last_err})"
+                f"{self._attr_name}: command failed ({last_err})"
             ) from last_err
         raise HomeAssistantError(
-            f"{self._attr_name}: Cube nicht per Bluetooth erreichbar. "
-            "Ist ein Bluetooth-Proxy in Reichweite?"
+            f"{self._attr_name}: cube unreachable over Bluetooth. "
+            "Is a Bluetooth proxy within range?"
         )
 
     async def async_added_to_hass(self) -> None:
-        """Stellt den zuletzt bekannten Zustand wieder her.
+        """Restore the last known state.
 
-        Die Cubes lassen sich nicht auslesen (siehe README), und nach einem
-        Neustart stuende sonst jede Leuchte wieder auf "aus" — obwohl sie in
-        Wirklichkeit weiterleuchtet. Home Assistants gespeicherter Zustand ist
-        die einzige Quelle, die wir haben.
+        The cubes cannot be read back (see README), so after a restart every
+        lamp would otherwise show as "off" while actually still lit. Home
+        Assistant's stored state is the only source we have.
 
-        Es bleibt eine Annahme: Wurde in der Zwischenzeit ueber die
-        Hersteller-App oder am Geraet geschaltet, kann sie falsch sein. Das ist
-        aber naeher an der Wirklichkeit als ein pauschales "aus".
+        It stays an assumption: if someone switched the lamp through the vendor
+        app or at the device in the meantime, it can be wrong. Still closer to
+        reality than a blanket "off".
         """
         await super().async_added_to_hass()
         last = await self.async_get_last_state()
@@ -540,9 +559,9 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
 
         self._attr_is_on = last.state == STATE_ON
         attrs = last.attributes
-        # Der gespeicherte Zustand kommt aus HAs Ablage und koennte aus einer
-        # aelteren Version stammen. Unbrauchbare Werte duerfen die Entity nicht
-        # am Starten hindern — dann gelten eben die Vorgabewerte.
+        # The stored state comes from HA's own storage and may originate from
+        # an older version. Unusable values must not stop the entity from
+        # starting — the defaults apply instead.
         try:
             if (bri := attrs.get(ATTR_BRIGHTNESS)) is not None:
                 self._attr_brightness = int(bri)
@@ -554,9 +573,9 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
             if mode in (ColorMode.HS, ColorMode.COLOR_TEMP):
                 self._attr_color_mode = ColorMode(mode)
         except (TypeError, ValueError) as err:
-            _LOGGER.debug("%s: gespeicherte Werte unbrauchbar (%s)",
+            _LOGGER.debug("%s: stored values unusable (%s)",
                           self._attr_name, err)
-        _LOGGER.debug("%s: Zustand wiederhergestellt (%s, %s)",
+        _LOGGER.debug("%s: state restored (%s, %s)",
                       self._attr_name, last.state, self._attr_color_mode)
 
     async def async_will_remove_from_hass(self) -> None:
@@ -602,14 +621,14 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         self._attr_hs_color = snap["hs_color"]
 
     def _schedule_send(self, previous: dict) -> None:
-        """Zeigt den Wunschzustand sofort an und sendet im Hintergrund.
+        """Show the desired state at once and send in the background.
 
-        Ein kalter Verbindungsaufbau dauert bei diesen Leuchten lange: Sie
-        werben nur etwa alle 50 Sekunden, und vorher kann kein Proxy eine
-        Verbindung beginnen. Würde der Dienstaufruf so lange blockieren, sähe
-        die Oberfläche aus, als sei nichts passiert — und man drückt erneut.
-        Deshalb schaltet die Anzeige sofort um; bestätigt der Cube den Befehl
-        nicht, nehmen wir sie nachträglich zurück.
+        A cold connection takes a long time with these lamps: they advertise
+        only about every 50 seconds, and no proxy can start a connection before
+        that. If the service call blocked for that long the UI would look as
+        though nothing had happened — and you press again. So the display
+        switches immediately; if the cube does not acknowledge the command, it
+        is rolled back afterwards.
         """
         if self._send_task is None or self._send_task.done():
             self._before_send = previous
@@ -619,15 +638,15 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
             self._send_task = self.hass.async_create_task(self._send_loop())
 
     async def _send_loop(self) -> None:
-        """Sendet, bis kein neuerer Wunsch mehr ansteht."""
+        """Keep sending until no newer request is outstanding."""
         while self._pending:
             self._pending = False
             try:
                 await self._send()
             except HomeAssistantError as err:
                 if self._pending:
-                    continue          # es steht schon ein neuerer Wunsch an
-                _LOGGER.warning("%s: %s — Anzeige zurückgesetzt",
+                    continue          # a newer request is already queued
+                _LOGGER.warning("%s: %s — display rolled back",
                                 self._attr_name, err)
                 self._restore(self._before_send)
                 self.async_write_ha_state()

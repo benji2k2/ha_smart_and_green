@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """
-Smart & Green / Linkio "Cube" – BLE-Steuerungstest (macOS, bleak).
+Smart & Green / Linkio "Cube" — BLE control test (macOS, bleak).
 
-Baut ein LMP-Farb-/OnOff-Frame exakt wie die App (cmdFactory.build_color_control +
-connection.ble.js sendBytesCmd), verschlüsselt es mit den aus internal.config.lap
-extrahierten Keys (PRIVATE_KEY-Modus) und schreibt es auf die GATT-Characteristic.
+Builds an LMP colour/on-off frame exactly like the app
+(cmdFactory.build_color_control + connection.ble.js sendBytesCmd), encrypts it
+with the keys extracted from internal.config.lap (PRIVATE_KEY mode) and writes
+it to the GATT characteristic.
 
-Benutzung:
-  ./.venv/bin/python ble_test.py scan                 # nur scannen, nichts senden
-  ./.venv/bin/python ble_test.py redtest              # CubeLarge: rot an, 3s, aus
+Usage:
+  ./.venv/bin/python ble_test.py scan                 # scan only, send nothing
+  ./.venv/bin/python ble_test.py adv                  # decode advertisements
+  ./.venv/bin/python ble_test.py redtest              # CubeLarge: red on, 3s, off
   ./.venv/bin/python ble_test.py redtest --small      # CubeSmall
   ./.venv/bin/python ble_test.py on  --h 285 --s 100 --v 100
   ./.venv/bin/python ble_test.py off
-  ./.venv/bin/python ble_test.py redtest --group      # an Gruppe "Alle" (FF:FF)
+  ./.venv/bin/python ble_test.py redtest --group      # to the "all" group (FF:FF)
+  ./.venv/bin/python ble_test.py acktest --small      # acknowledged commands
 
-Erste Ausführung: macOS fragt nach Bluetooth-Zugriff fürs Terminal -> erlauben.
+First run: macOS asks for Bluetooth access for the terminal — allow it.
 """
 import argparse, asyncio, hashlib, json, os, sys
 from Crypto.Cipher import AES
@@ -23,12 +26,12 @@ from bleak import BleakScanner, BleakClient
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONF = os.path.join(HERE, "conf", "lnk.SandG.conf.txt")
 
-# LINKIO_LMP_SERVICE 41C15000-..., TXRX-Characteristic 5002 (Senden + Notify)
+# LINKIO_LMP_SERVICE 41C15000-..., TXRX characteristic 5002 (write + notify)
 SERVICE_UUID = "41c15000-6def-11e5-bcde-0002a5d5c51b"
 CHAR_UUID = "00005002-0000-1000-8000-00805f9b34fb"
-COMPANY_ID = 0x04AA                      # Linkio, wie von bleak/CoreBluetooth gemeldet
+COMPANY_ID = 0x04AA                      # Linkio, as reported by bleak/CoreBluetooth
 
-# LMP-Konstanten (aus core_ble_type.js / core_lmp_opcodes.js)
+# LMP constants (from core_ble_type.js / core_lmp_opcodes.js)
 MSG_CMD_NO_ACK = 0x00
 ENC_NONE, ENC_PUBLIC, ENC_PRIVATE = 0x00, 0x01, 0x02
 FRAME_LMP_SHORT = 0x02
@@ -49,7 +52,7 @@ def hexs(b):
 
 
 def hsv_to_rgb_tinycolor(h, s, v):
-    """Repliziert tinycolor HSVtoRGB: h[0-360], s,v[0-100] -> r,g,b (0-255, gerundet)."""
+    """Replicates tinycolor HSVtoRGB: h[0-360], s,v[0-100] -> r,g,b (0-255, rounded)."""
     h = (h % 360) / 360.0
     s = s / 100.0
     v = v / 100.0
@@ -66,22 +69,22 @@ def hsv_to_rgb_tinycolor(h, s, v):
 
 
 def process_color(h, s, v, power_constraint=1, intensity_constraint=True):
-    """processColor() fuer color-white-dimmable, RGBW an, color_mode=COLOR, linear aus."""
+    """processColor() for color-white-dimmable, RGBW on, color_mode=COLOR, linear off."""
     coeff = 1.0
     if intensity_constraint:
         r, g, b = hsv_to_rgb_tinycolor(h, s, 100)
         total = r + g + b
         coeff = 255.0 / total if total else 1.0
     out_v = v * (s / 100.0) * power_constraint * coeff
-    white_value = (100 - s) * (v / 100.0) * power_constraint   # color_mode == COLOR -> ohne +0x80
+    white_value = (100 - s) * (v / 100.0) * power_constraint   # color_mode == COLOR -> without +0x80
     return {"h": h, "s": s, "v": out_v, "white": white_value}
 
 
 def build_color_payload(index, onoff, h, s, v):
-    """cmdFactory.build_color_control fuer ein RGBW-Device (API>=2)."""
+    """cmdFactory.build_color_control for an RGBW device (API >= 2)."""
     pc = process_color(h, s, v)
     b = []
-    b.append(0)                                  # [0] len-Platzhalter
+    b.append(0)                                  # [0] length placeholder
     b.append(OP_DEVICE_DATA_SET)                 # [1] 0x41
     b.append(index & 0xFF)                       # [2] device index
     b.append((1 if onoff else 0) + (LED_MODE_COLOR << 4))  # [3] onoff | ledmode<<4
@@ -92,12 +95,12 @@ def build_color_payload(index, onoff, h, s, v):
     b.append(FADE_COLOR_TRANSITION & 0xFF)       # [8] param low
     b.append((FADE_COLOR_TRANSITION >> 8) & 0xFF)  # [9] param high
     b.append(int(pc["white"]) & 0xFF)            # [10] white value (RGBW)
-    b[0] = len(b) - 1                            # laenge = index des letzten Bytes
+    b[0] = len(b) - 1                            # length = index of the last byte
     return b
 
 
 def build_white_payload(index, onoff, level=100, flag=True):
-    """Weiß-Modus: V=0, Weiß-Byte traegt (optional) das 0x80-Flag (WHITE_MODE)."""
+    """White mode: V=0, white byte optionally carries the 0x80 flag (WHITE_MODE)."""
     white = int(max(0, min(100, level)))
     if flag:
         white += 0x80
@@ -106,12 +109,12 @@ def build_white_payload(index, onoff, level=100, flag=True):
         OP_DEVICE_DATA_SET,
         index & 0xFF,
         (1 if onoff else 0) + (LED_MODE_COLOR << 4),
-        0,                                      # V = 0 (Farb-LEDs aus)
+        0,                                      # V = 0 (colour LEDs off)
         0, 0,                                   # H
         0,                                      # S = 0
         FADE_COLOR_TRANSITION & 0xFF,
         (FADE_COLOR_TRANSITION >> 8) & 0xFF,
-        white & 0xFF,                           # Weiss-Byte (+0x80 = WHITE_MODE)
+        white & 0xFF,                           # white byte (+0x80 = WHITE_MODE)
     ]
     b[0] = len(b) - 1
     return b
@@ -119,7 +122,7 @@ def build_white_payload(index, onoff, level=100, flag=True):
 
 def build_group_color_payload(class_id, onoff, h, s, v):
     p = build_color_payload(class_id, onoff, h, s, v)
-    p[1] = OP_GROUP_DATA_SET                      # 0x56 statt 0x41
+    p[1] = OP_GROUP_DATA_SET                      # 0x56 instead of 0x41
     return p
 
 
@@ -134,22 +137,23 @@ FRAME_LOCAL_SHORT = 0x00
 def build_frame(lmp_addr, payload, key1, nonce, cmd_id=1,
                 encryption=ENC_PRIVATE, msg_type=MSG_CMD_NO_ACK,
                 frame_type=FRAME_LMP_SHORT):
-    """sendBytesCmd() Short-Frame -> 20 Byte fertig fuer den GATT-Write.
+    """sendBytesCmd() short frame -> 20 bytes ready for the GATT write.
 
-    frame_type LOCAL (0) entspricht CONX_MODE_DIRECT der App: bei direkter
-    Verbindung stehen statt der LMP-Adresse zwei Nullbytes. Genau so antwortet
-    der Cube uns auch (Header 0x50 = msg_type 2 / enc 2 / frame 0).
+    frame_type LOCAL (0) corresponds to the app's CONX_MODE_DIRECT: over a
+    direct connection two zero bytes take the place of the LMP address. That is
+    exactly how the cube replies to us (header 0x50 = msg_type 2 / enc 2 /
+    frame 0).
     """
-    # Header
+    # header
     b0 = ((msg_type << 5) & 0xE0) | ((encryption << 3) & 0x18) | (frame_type & 0x07)
     header = [b0, cmd_id & 0xFF]
     if frame_type == FRAME_LOCAL_SHORT:
         addr = [0x00, 0x00]
     else:
-        # Adresse "41:E0" -> [0xE0, 0x41] (letztes, dann vorletztes Byte)
+        # address "41:E0" -> [0xE0, 0x41] (last byte, then second-to-last)
         parts = lmp_addr.split(":")
         addr = [int(parts[-1], 16), int(parts[-2], 16)]
-    # Payload auf 15 Byte auffuellen: erst eine 0, dann 0xFF
+    # pad the payload to 15 bytes: first a 0, then 0xFF
     pl = list(payload)
     if len(pl) < 15:
         pl.append(0)
@@ -158,7 +162,7 @@ def build_frame(lmp_addr, payload, key1, nonce, cmd_id=1,
     crc = 0
     for x in pl:
         crc ^= x
-    full = [crc] + pl                             # 16 Byte (CRC + 15)
+    full = [crc] + pl                             # 16 bytes (CRC + 15)
     if encryption in (ENC_PUBLIC, ENC_PRIVATE):
         full = encrypt_payload(full, key1, nonce)
     frame = header + addr + full                  # 4 + 16 = 20
@@ -166,19 +170,19 @@ def build_frame(lmp_addr, payload, key1, nonce, cmd_id=1,
 
 
 def parse_adv(v):
-    """Manufacturer-Data (ohne Company-ID) laut core_ble_type.js."""
+    """Manufacturer data (without company id) per core_ble_type.js."""
     if len(v) < 4:
         return None
     typ, status = v[0], v[1]
     role = typ & 0x07
-    src = "%02X:%02X" % (v[3], v[2])              # als 'high:low' lesbar
+    src = "%02X:%02X" % (v[3], v[2])              # readable as 'high:low'
     return {"role": role, "connected": bool(status & 0x01),
             "registered": bool(status & 0x80),
             "src_bytes": (v[2], v[3]), "src": src}
 
 
 async def do_scan(seconds=8.0):
-    print(f"Scanne {seconds:.0f}s nach Linkio-Advertisern (Company 0x{COMPANY_ID:04X}) ...")
+    print(f"Scanning {seconds:.0f}s for Linkio advertisers (company 0x{COMPANY_ID:04X}) ...")
     found = {}
 
     def cb(device, adv):
@@ -194,8 +198,8 @@ async def do_scan(seconds=8.0):
     await scanner.stop()
 
     if not found:
-        print("  Nichts gefunden. Cube nah genug? Am iPhone die App schliessen "
-              "(haelt evtl. die Verbindung).")
+        print("  Nothing found. Cube close enough? Close the app on the phone "
+              "(it may be holding the connection).")
     for addr, (dev, adv, info) in found.items():
         print(f"  {addr}  RSSI {adv.rssi:>4}  name={dev.name!r}")
         if info:
@@ -206,13 +210,13 @@ async def do_scan(seconds=8.0):
 
 
 async def find_device(target_lmp):
-    """Sucht das BLE-Geraet, dessen Adv-Source-Adresse zur LMP-Kurzadresse passt."""
+    """Find the BLE device whose advertised source address matches the LMP address."""
     parts = target_lmp.split(":")
     want = {(int(parts[-1], 16), int(parts[-2], 16)),
             (int(parts[-2], 16), int(parts[-1], 16))}
-    # Name-Fallback: CubeSmall wirbt als "Bulb1340" (LMP 13:40 -> "1340")
+    # name fallback: CubeSmall advertises as "Bulb1340" (LMP 13:40 -> "1340")
     want_name = "bulb" + parts[-2].lower() + parts[-1].lower()
-    print(f"Suche Modul mit LMP {target_lmp} (Adv-Name ~ {want_name!r}) ...")
+    print(f"Looking for module with LMP {target_lmp} (adv name ~ {want_name!r}) ...")
     match = {}
 
     def cb(device, adv):
@@ -236,9 +240,9 @@ async def find_device(target_lmp):
     await scanner.stop()
     if not match:
         return None
-    # bestes RSSI
+    # strongest RSSI
     dev, adv = max(match.values(), key=lambda t: t[1].rssi)
-    print(f"  gefunden: {dev.address} RSSI {adv.rssi}")
+    print(f"  found: {dev.address} RSSI {adv.rssi}")
     return dev
 
 
@@ -247,28 +251,28 @@ async def send_frames(dev, frames):
         print(f"  <- NOTIFY {hexs(data)}")
 
     async with BleakClient(dev) as client:
-        print(f"  verbunden: {client.address}")
+        print(f"  connected: {client.address}")
         try:
             await client.start_notify(CHAR_UUID, on_notify)
         except Exception as e:
-            print(f"  (keine Notifications: {e})")
+            print(f"  (no notifications: {e})")
         for label, fr, wait in frames:
             print(f"  -> {label}: {hexs(fr)}")
             try:
                 await client.write_gatt_char(CHAR_UUID, fr, response=False)
             except Exception as e1:
-                print(f"     (write-no-response fehlgeschlagen: {e1}; versuche mit response)")
+                print(f"     (write-no-response failed: {e1}; trying with response)")
                 await client.write_gatt_char(CHAR_UUID, fr, response=True)
             await asyncio.sleep(wait)
         try:
             await client.stop_notify(CHAR_UUID)
         except Exception:
             pass
-    print("  fertig, getrennt.")
+    print("  done, disconnected.")
 
 
 async def do_scan_all(seconds=10.0):
-    print(f"Roh-Scan {seconds:.0f}s: ALLE BLE-Geraete in Reichweite ...")
+    print(f"Raw scan {seconds:.0f}s: ALL BLE devices in range ...")
     seen = {}
 
     def cb(device, adv):
@@ -280,9 +284,9 @@ async def do_scan_all(seconds=10.0):
     await scanner.stop()
 
     if not seen:
-        print("  Gar nichts empfangen (auch keine Handys/Kopfhoerer) -> BT-Problem.")
+        print("  Nothing received at all (not even phones/headphones) -> Bluetooth problem.")
         return
-    # nach RSSI sortiert, staerkstes zuerst
+    # sorted by RSSI, strongest first
     for addr, (dev, adv) in sorted(seen.items(), key=lambda kv: -kv[1][1].rssi):
         md = adv.manufacturer_data
         md_str = ", ".join("0x%04X=%s" % (k, hexs(v)) for k, v in md.items()) or "-"
@@ -294,7 +298,7 @@ async def do_scan_all(seconds=10.0):
 
 
 # ---------------------------------------------------------------- Advertising
-# Opcodes aus core_lmp_opcodes.js, nur die hier interessanten.
+# Opcodes from core_lmp_opcodes.js, only the ones of interest here.
 LMP_NAMES = {
     0x82: "STATUS_NETWORK", 0x84: "STATUS_NETWORK_GTW_LIST",
     0x80: "STATUS_ACK", 0x81: "STATUS_REGISTRATION", 0x83: "STATUS_HEARTBEAT",
@@ -320,7 +324,7 @@ def keystream(key1, nonce):
 
 
 def decode_tlv(body):
-    """Zerlegt einen entschluesselten Payload in (opcode, name, data)."""
+    """Split a decrypted payload into (opcode, name, data)."""
     out, i = [], 0
     while i < len(body):
         size = body[i]
@@ -333,7 +337,7 @@ def decode_tlv(body):
 
 
 def decode_encrypted_payload(enc16, ks):
-    """XOR-entschluesseln, CRC pruefen, TLVs zurueckgeben. None bei CRC-Fehler."""
+    """XOR-decrypt, verify the CRC, return TLVs. None on a CRC mismatch."""
     pay = bytes(a ^ b for a, b in zip(enc16, ks))
     crc_rx, body = pay[0], pay[1:16]
     crc = 0
@@ -345,7 +349,7 @@ def decode_encrypted_payload(enc16, ks):
 
 
 def decode_adv(md, ks):
-    """Linkio-Manufacturer-Data (ohne Company-ID) auswerten."""
+    """Decode Linkio manufacturer data (without the company id)."""
     if len(md) < 24:
         return None
     hdr, status = md[0], md[1]
@@ -363,8 +367,8 @@ def decode_adv(md, ks):
 
 
 async def do_adv(ks, seconds=12.0):
-    """Advertisements der Cubes mitlesen und entschluesseln (nur passiv)."""
-    print(f"Lese {seconds:.0f}s Advertisements (entschluesselt) ...")
+    """Listen to the cubes' advertisements and decrypt them (passive only)."""
+    print(f"Reading advertisements for {seconds:.0f}s (decrypted) ...")
     seen = {}
 
     def cb(device, adv):
@@ -381,14 +385,14 @@ async def do_adv(ks, seconds=12.0):
     await scanner.stop()
 
     if not seen:
-        print("  Keine Linkio-Advertisements empfangen.")
+        print("  No Linkio advertisements received.")
         return
     for addr, (dev, adv, info) in sorted(seen.items(), key=lambda kv: -kv[1][1].rssi):
         print(f"  {dev.name or '?':10} {addr}  RSSI {adv.rssi:>4}")
-        print(f"      src={info['src']} registriert={info['registered']} "
-              f"verbunden={info['connected']} seq={info['seq']}")
+        print(f"      src={info['src']} registered={info['registered']} "
+              f"connected={info['connected']} seq={info['seq']}")
         if info["tlv"] is None:
-            print("      Payload: CRC-Fehler (falscher Key?)")
+            print("      payload: CRC mismatch (wrong key?)")
             continue
         for typ, name, data in info["tlv"]:
             extra = f" -> {int.from_bytes(data, 'little')}" if 0 < len(data) <= 4 else ""
@@ -400,10 +404,10 @@ OP_STATUS_DEVICE_DATA = 0x93
 
 
 def build_state_query(dest_lmp, device_id, earliest, latest):
-    """cmdFactory.build_get_latest_statuses: Zustand eines Geraets abfragen."""
+    """cmdFactory.build_get_latest_statuses: query a device's state."""
     parts = dest_lmp.split(":")
     b = [0, OP_DEVICE_DATA_GET,
-         int(parts[-1], 16), int(parts[-2], 16),   # Adresse: low, high
+         int(parts[-1], 16), int(parts[-2], 16),   # address: low, high
          device_id & 0xFF]
     for val in (earliest, latest):
         b += [val & 0xFF, (val >> 8) & 0xFF, (val >> 16) & 0xFF, (val >> 24) & 0xFF]
@@ -412,10 +416,10 @@ def build_state_query(dest_lmp, device_id, earliest, latest):
 
 
 def decode_device_data(data):
-    """STATUS_DEVICE_DATA fuer eine COLOR_WHITE_DIMMABLE_LIGHT auswerten.
+    """Decode STATUS_DEVICE_DATA for a COLOR_WHITE_DIMMABLE_LIGHT.
 
-    Feldfolge laut connectionFactory.js: Device-ID, Zeitstempel (4 Byte),
-    Status, onoff|ledmode, V, H (2 Byte), S, Params (2 Byte), optional Weiss.
+    Field order per connectionFactory.js: device id, timestamp (4 bytes),
+    status, onoff|ledmode, V, H (2 bytes), S, params (2 bytes), optional white.
     """
     if len(data) < 12:
         return None
@@ -443,12 +447,12 @@ def fmt_tlv_value(data):
 
 
 async def query_module(dev, ks, frames, wait=3.0):
-    """Sendet Abfrage-Frames und dekodiert die Notify-Antworten.
+    """Send query frames and decode the notify replies.
 
-    Laengere Antworten kommen als MEHRERE Notifies: Byte [2] ist der Index,
-    Byte [3] der hoechste Index. Jedes Fragment ist einzeln verschluesselt und
-    CRC-gesichert, aber die TLV-Liste laeuft ueber die Fragmentgrenzen hinweg —
-    sie darf also erst nach dem Zusammensetzen zerlegt werden.
+    Longer replies arrive as SEVERAL notifies: byte [2] is the index, byte [3]
+    the highest index. Each fragment is separately encrypted and CRC-protected,
+    but the TLV list spans fragment boundaries — so it may only be parsed after
+    reassembly.
     """
     answers = []
     parts = {}
@@ -465,7 +469,7 @@ async def query_module(dev, ks, frames, wait=3.0):
                          3: "INVALID_PARAMETER", 4: "INVALID_DEVICE",
                          5: "UNREGISTERED", 8: "TIMEOUT", 20: "ITEM_NOT_FOUND"}
                 print(f"       -> ACK {val[0]} = "
-                      f"{known.get(val[0], 'UNBEKANNT (evtl. Anzahl Datensaetze)')}")
+                      f"{known.get(val[0], 'UNKNOWN')}")
             if typ in (OP_STATUS_DEVICE_DATA, 0x92):
                 st = decode_device_data(val)
                 if st:
@@ -491,7 +495,7 @@ async def query_module(dev, ks, frames, wait=3.0):
             flush()
 
     async with BleakClient(dev) as client:
-        print(f"  verbunden: {client.address}")
+        print(f"  connected: {client.address}")
         await client.start_notify(CHAR_UUID, on_notify)
         for label, fr in frames:
             print(f"  -> {label}: {hexs(fr)}")
@@ -500,19 +504,19 @@ async def query_module(dev, ks, frames, wait=3.0):
             except Exception:
                 await client.write_gatt_char(CHAR_UUID, fr, response=False)
             await asyncio.sleep(wait)
-            flush()   # unvollstaendige Antwort trotzdem zeigen
+            flush()   # show an incomplete reply anyway
         try:
             await client.stop_notify(CHAR_UUID)
         except Exception:
             pass
     if not answers:
-        print("  Keine auswertbare Antwort erhalten.")
+        print("  No usable reply received.")
     return answers
 
 
 async def dump_gatt(dev):
     async with BleakClient(dev) as client:
-        print(f"  verbunden: {client.address}")
+        print(f"  connected: {client.address}")
         for svc in client.services:
             print(f"  SERVICE {svc.uuid}")
             for ch in svc.characteristics:
@@ -526,13 +530,13 @@ def main():
                     choices=["scan", "scanall", "adv", "gatt", "battery", "state", "probe", "probe2", "acktest",
                              "redtest", "whitetest", "sweep", "on", "off"])
     ap.add_argument("--gap", action="store_true",
-                    help="zwischen den Schritten ausschalten (statt direktem Wechsel)")
+                    help="switch off between steps (instead of a direct transition)")
     ap.add_argument("--hold", type=float, default=3.0,
-                    help="Sekunden pro Schritt (Standard 3)")
-    ap.add_argument("--small", action="store_true", help="CubeSmall statt CubeLarge")
-    ap.add_argument("--group", action="store_true", help="an Gruppe 'Alle' (FF:FF)")
+                    help="seconds per step (default 3)")
+    ap.add_argument("--small", action="store_true", help="CubeSmall instead of CubeLarge")
+    ap.add_argument("--group", action="store_true", help="to the 'all' group (FF:FF)")
     ap.add_argument("--wait", type=float, default=0,
-                    help="Sekunden auf Antworten warten (state: Standard 15)")
+                    help="seconds to wait for replies (state: default 15)")
     ap.add_argument("--h", type=float, default=285)
     ap.add_argument("--s", type=float, default=100)
     ap.add_argument("--v", type=float, default=100)
@@ -542,8 +546,10 @@ def main():
     key1 = conf["keyCrypt1"]
     nonce = conf["nounceAESCrypt"]
     enc_mode = conf.get("encryptionMode", 2)
+    # Do NOT print key/nonce: debug output tends to end up in bug reports.
+    # A fingerprint is enough to compare two configurations.
     fp = hashlib.sha256(bytes(key1) + bytes(nonce)).hexdigest()[:8]
-    print(f"encryptionMode={enc_mode}  key/nonce geladen (fingerprint {fp})")
+    print(f"encryptionMode={enc_mode}  key/nonce loaded (fingerprint {fp})")
 
     modkey = "mod_1" if args.small else "mod_0"
     mod = conf[modkey]
@@ -565,12 +571,12 @@ def main():
     if args.action == "acktest":
         target = mod["identification"]["lmp_addr"]
         ks = keystream(key1, nonce)
-        # Die App steuert mit CMD_WITH_ACK. Wir pruefen zweierlei:
-        # 1. quittiert der Cube den Steuerbefehl (Zustellbestaetigung)?
-        # 2. meldet er die Aenderung als LMP_EVENT_DEVICE_DATA (0x92) zurueck?
+        # The app controls with CMD_WITH_ACK. Two things to check:
+        # 1. does the cube acknowledge the control command (delivery proof)?
+        # 2. does it report the change as LMP_EVENT_DEVICE_DATA (0x92)?
         steps = [
-            ("ROT an  (mit ACK)", build_color_payload(dev_index, True, 0, 100, 100)),
-            ("AUS     (mit ACK)", build_color_payload(dev_index, False, 0, 100, 100)),
+            ("RED on  (with ACK)", build_color_payload(dev_index, True, 0, 100, 100)),
+            ("OFF     (with ACK)", build_color_payload(dev_index, False, 0, 100, 100)),
         ]
         frames = [(label, build_frame(target, payload, key1, nonce, cmd_id=i + 1,
                                       msg_type=CMD_WITH_ACK))
@@ -579,7 +585,7 @@ def main():
         async def find_and_ack():
             dev = await find_device(target)
             if dev is None:
-                print("Modul nicht gefunden.")
+                print("Module not found.")
                 return False
             await query_module(dev, ks, frames, wait=args.wait or 5.0)
             return True
@@ -595,13 +601,13 @@ def main():
         OP_DEVICES_DATA_LIST_GET = 0x4A
         OP_DEVICE_PROPERTY_GET = 0x44
         variants = [
-            # MODULE_INFO_GET (0x30) funktioniert -> das Geraete-Gegenstueck probieren
-            ("DEVICE_INFO_GET mit Index", [2, OP_DEVICE_INFO_GET, dev_index]),
-            ("DEVICE_INFO_GET ohne Index", [1, OP_DEVICE_INFO_GET]),
+            # MODULE_INFO_GET (0x30) works -> try the device counterpart
+            ("DEVICE_INFO_GET with index", [2, OP_DEVICE_INFO_GET, dev_index]),
+            ("DEVICE_INFO_GET without index", [1, OP_DEVICE_INFO_GET]),
             ("DEVICES_DATA_LIST_GET", [1, OP_DEVICES_DATA_LIST_GET]),
-            ("DEVICES_DATA_LIST_GET mit Index", [2, OP_DEVICES_DATA_LIST_GET, dev_index]),
+            ("DEVICES_DATA_LIST_GET with index", [2, OP_DEVICES_DATA_LIST_GET, dev_index]),
         ]
-        # Property-IDs jenseits von 0/1 (die lieferten INVALID_PARAMETER)
+        # property ids beyond 0/1 (those returned INVALID_PARAMETER)
         variants += [(f"PROPERTY_GET property {pid}",
                       [3, OP_DEVICE_PROPERTY_GET, dev_index, pid])
                      for pid in range(2, 8)]
@@ -614,7 +620,7 @@ def main():
         async def find_and_probe2():
             dev = await find_device(target)
             if dev is None:
-                print("Modul nicht gefunden.")
+                print("Module not found.")
                 return False
             await query_module(dev, ks, frames, wait=args.wait or 3.0)
             return True
@@ -630,13 +636,13 @@ def main():
         now = int(_time.time())
         OP_DEVICE_PROPERTY_GET = 0x44
         variants = [
-            ("DATA_GET local, ganzer Bereich",
+            ("DATA_GET local, full range",
              build_state_query(target, dev_index, 0, 0xFFFFFFFF), FRAME_LOCAL_SHORT),
-            ("DATA_GET local, Bereich 0/0",
+            ("DATA_GET local, range 0/0",
              build_state_query(target, dev_index, 0, 0), FRAME_LOCAL_SHORT),
-            ("DATA_GET local, letzte Stunde",
+            ("DATA_GET local, last hour",
              build_state_query(target, dev_index, now - 3600, now + 60), FRAME_LOCAL_SHORT),
-            ("DATA_GET lmp, Klassen-ID 19 statt Geraet",
+            ("DATA_GET lmp, class id 19 instead of device",
              build_state_query(target, class_id, 0, 0xFFFFFFFF), FRAME_LMP_SHORT),
             ("PROPERTY_GET local, property 0",
              [3, OP_DEVICE_PROPERTY_GET, dev_index, 0], FRAME_LOCAL_SHORT),
@@ -650,7 +656,7 @@ def main():
         async def find_and_probe():
             dev = await find_device(target)
             if dev is None:
-                print("Modul nicht gefunden.")
+                print("Module not found.")
                 return False
             await query_module(dev, ks, frames, wait=args.wait or 4.0)
             return True
@@ -664,10 +670,10 @@ def main():
         target = mod["identification"]["lmp_addr"]
         ks = keystream(key1, nonce)
         now = int(_time.time())
-        # Zwei Zeitfenster, weil unklar ist, welche Uhr der Cube fuehrt.
+        # Two time windows, since it is unclear which clock the cube keeps.
         queries = [
-            ("DEVICE_DATA_GET (ganzer Bereich)", build_state_query(target, dev_index, 0, 0xFFFFFFFF)),
-            ("DEVICE_DATA_GET (letzte 24 h)", build_state_query(target, dev_index, now - 86400, now + 3600)),
+            ("DEVICE_DATA_GET (full range)", build_state_query(target, dev_index, 0, 0xFFFFFFFF)),
+            ("DEVICE_DATA_GET (last 24h)", build_state_query(target, dev_index, now - 86400, now + 3600)),
         ]
         frames = [(label, build_frame(target, payload, key1, nonce, cmd_id=i + 1,
                                       msg_type=CMD_WITH_ACK))
@@ -676,7 +682,7 @@ def main():
         async def find_and_state():
             dev = await find_device(target)
             if dev is None:
-                print("Modul nicht gefunden.")
+                print("Module not found.")
                 return False
             await query_module(dev, ks, frames, wait=args.wait or 15.0)
             return True
@@ -688,7 +694,7 @@ def main():
     if args.action == "battery":
         target = mod["identification"]["lmp_addr"]
         ks = keystream(key1, nonce)
-        # Drei Abfragen, weil unklar ist, welche das Geraet beantwortet.
+        # Three queries, since it is unclear which one the device answers.
         queries = [
             ("BATTERY_STATUS_GET (0x2D)", [1, OP_MODULE_BATTERY_STATUS_GET]),
             ("BATTERY_LEVEL_GET (0x2C)", [1, OP_MODULES_BATTERY_LEVEL_GET]),
@@ -703,7 +709,7 @@ def main():
         async def find_and_query():
             dev = await find_device(target)
             if dev is None:
-                print("Modul nicht gefunden.")
+                print("Module not found.")
                 return False
             await query_module(dev, ks, frames)
             return True
@@ -718,14 +724,14 @@ def main():
         async def find_and_dump():
             dev = await find_device(target)
             if dev is None:
-                print("Modul nicht gefunden.")
+                print("Module not found.")
                 return
             await dump_gatt(dev)
 
         asyncio.run(find_and_dump())
         return
 
-    # Ziel-Adresse + Payload
+    # target address + payload
     if args.group:
         target_lmp = "FF:FF"
         def color(onoff, h, s, v):
@@ -735,15 +741,15 @@ def main():
         def color(onoff, h, s, v):
             return build_color_payload(dev_index, onoff, h, s, v)
 
-    print(f"Ziel: {modkey} '{mod['identification']['name']}' "
+    print(f"Target: {modkey} '{mod['identification']['name']}' "
           f"LMP {target_lmp}"
-          + ("  (als GRUPPE)" if args.group else ""))
+          + ("  (as GROUP)" if args.group else ""))
 
     frames = []
     if args.action == "sweep":
-        # (Label, H, S, V) — Weiss laeuft in der App ueber den FARBWEG:
+        # (label, H, S, V) — in the app white goes through the COLOUR path:
         # niedrige Saettigung => hoher Weiss-Kanal (kalt),
-        # warmer Ton mit hoher Saettigung => orange LEDs (warm).
+        # a warm hue at high saturation => orange LEDs (warm).
         steps = [
             ("Warmweiss ~2200K (h30 s85)", 30, 85, 100),
             ("Neutralweiss  (h30 s40)",    30, 40, 100),
@@ -762,43 +768,43 @@ def main():
                            args.hold))
             if args.gap:
                 cid += 1
-                frames.append(("  -> aus",
+                frames.append(("  -> off",
                                build_frame(target_lmp,
                                            build_color_payload(dev_index, False, h, s, v),
                                            key1, nonce, cmd_id=cid), 1.2))
         cid += 1
-        frames.append(("AUS (Ende)",
+        frames.append(("OFF (end)",
                        build_frame(target_lmp,
                                    build_color_payload(dev_index, False, 0, 0, 100),
                                    key1, nonce, cmd_id=cid), 0.5))
     elif args.action == "whitetest":
-        # A: Weiß MIT 0x80-Flag (WHITE_MODE) — Theorie
-        frames.append(("WEISS mit 0x80-Flag",
+        # A: white WITH the 0x80 flag (WHITE_MODE) — the theory
+        frames.append(("WHITE with 0x80 flag",
                        build_frame(target_lmp, build_white_payload(dev_index, True, 100, True),
                                    key1, nonce, cmd_id=1), 4.0))
-        frames.append(("AUS", build_frame(target_lmp, build_white_payload(dev_index, False, 100, True),
+        frames.append(("OFF", build_frame(target_lmp, build_white_payload(dev_index, False, 100, True),
                                           key1, nonce, cmd_id=2), 2.0))
-        # B: Weiß OHNE Flag — Gegenprobe (bisheriges Verhalten)
-        frames.append(("WEISS ohne Flag",
+        # B: white WITHOUT the flag — control (previous behaviour)
+        frames.append(("WHITE without flag",
                        build_frame(target_lmp, build_white_payload(dev_index, True, 100, False),
                                    key1, nonce, cmd_id=3), 4.0))
-        frames.append(("AUS", build_frame(target_lmp, build_white_payload(dev_index, False, 100, False),
+        frames.append(("OFF", build_frame(target_lmp, build_white_payload(dev_index, False, 100, False),
                                           key1, nonce, cmd_id=4), 2.0))
     elif args.action == "redtest":
-        frames.append(("ROT an", build_frame(target_lmp, color(True, 0, 100, 100), key1, nonce, cmd_id=1), 3.0))
-        frames.append(("AUS",    build_frame(target_lmp, color(False, 0, 100, 100), key1, nonce, cmd_id=2), 0.5))
+        frames.append(("RED on", build_frame(target_lmp, color(True, 0, 100, 100), key1, nonce, cmd_id=1), 3.0))
+        frames.append(("OFF",    build_frame(target_lmp, color(False, 0, 100, 100), key1, nonce, cmd_id=2), 0.5))
     elif args.action == "on":
-        frames.append(("AN", build_frame(target_lmp, color(True, args.h, args.s, args.v), key1, nonce, cmd_id=1), 0.5))
+        frames.append(("ON", build_frame(target_lmp, color(True, args.h, args.s, args.v), key1, nonce, cmd_id=1), 0.5))
     elif args.action == "off":
-        frames.append(("AUS", build_frame(target_lmp, color(False, args.h, args.s, args.v), key1, nonce, cmd_id=1), 0.5))
+        frames.append(("OFF", build_frame(target_lmp, color(False, args.h, args.s, args.v), key1, nonce, cmd_id=1), 0.5))
 
-    # Geraet finden + senden in EINER Event-Loop (CoreBluetooth-Anforderung)
+    # find the device and send within ONE event loop (CoreBluetooth requirement)
     lookup_lmp = mod["identification"]["lmp_addr"]
 
     async def find_and_send():
         dev = await find_device(lookup_lmp)
         if dev is None:
-            print("Modul nicht per BLE gefunden. 'scan' ausfuehren; App am iPhone schliessen; naeher ran.")
+            print("Module not found over BLE. Run 'scan'; close the app on the phone; move closer.")
             return False
         await send_frames(dev, frames)
         return True

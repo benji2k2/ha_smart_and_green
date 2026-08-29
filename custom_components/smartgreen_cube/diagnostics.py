@@ -1,4 +1,4 @@
-"""Diagnose-Daten für Smart & Green Cube — mit Redaction der Geheimnisse."""
+"""Diagnostics for Smart & Green Cube, with secrets redacted."""
 from __future__ import annotations
 
 from typing import Any
@@ -16,7 +16,7 @@ TO_REDACT = {CONF_KEY, CONF_NONCE}
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> dict[str, Any]:
-    """Liefert Diagnosedaten; Schlüssel und Nonce werden maskiert."""
+    """Return diagnostics data; key and nonce are redacted."""
     return {
         "entry_data": async_redact_data(dict(entry.data), TO_REDACT),
         "entry_options": async_redact_data(dict(entry.options), TO_REDACT),
