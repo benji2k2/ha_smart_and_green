@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import logging
 from typing import Any
 
@@ -20,7 +21,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.const import STATE_ON, STATE_UNAVAILABLE
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.restore_state import (
+    ExtraStoredData,
+    RestoreEntity,
+)
 
 from .const import (
     CHAR_UUID,
@@ -145,6 +149,11 @@ async def _release_other_clients(keep: str) -> None:
     advertisement (~50s).
     """
     for other in [m for m in _CLIENTS if m != keep]:
+        # Never pull a connection out from under a send that is in flight —
+        # that would fail someone else's command to free a slot for ours.
+        lock = _LOCKS.get(other)
+        if lock is not None and lock.locked():
+            continue
         if (task := _IDLE_TASKS.pop(other, None)) is not None:
             task.cancel()
         _forget_connection(other)
@@ -179,11 +188,17 @@ def _schedule_idle_disconnect(mac: str) -> None:
 
 
 def _forget_connection(mac: str) -> None:
-    """Discard acknowledgement state of a connection that no longer exists."""
+    """Discard acknowledgement state of a connection that no longer exists.
+
+    Pending waiters are resolved with ``None`` rather than cancelled.
+    Cancelling would raise CancelledError inside the waiting ``_send``, which
+    asyncio propagates as task cancellation — the send task would then die
+    without logging anything or rolling back the optimistic state.
+    """
     _ACK_ACTIVE.pop(mac, None)
     for waiter in _ACK_WAITERS.pop(mac, {}).values():
         if not waiter.done():
-            waiter.cancel()
+            waiter.set_result(None)
 
 
 async def _drop_client(mac: str) -> None:
@@ -221,6 +236,21 @@ async def async_setup_entry(
         )
 
     async_add_entities(entities)
+
+
+@dataclass
+class StoredCubeState(ExtraStoredData):
+    """The entity's own restore payload.
+
+    Home Assistant strips colour attributes from a light's state while it is
+    off, so restoring from the plain state loses the colour of a lamp that was
+    switched off before the restart. Storing our own copy keeps it.
+    """
+
+    data: dict
+
+    def as_dict(self) -> dict:
+        return self.data
 
 
 class SmartGreenCubeLight(LightEntity, RestoreEntity):
@@ -281,18 +311,13 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         return self._cmd_id or 1
 
     def _target_lmps(self) -> list[str]:
-        """Candidates to send through.
+        """Cubes that can serve as an entry point for this entity's frame.
 
-        A group broadcast to FF:FF reaches every cube through the mesh, so
-        *one* cube suffices as the entry point and we pay the advertising
-        interval only once. We prefer one we are already connected to, which
-        removes the wait entirely.
+        A group broadcast to FF:FF reaches every cube through the mesh, so any
+        member will do. Ordering is left to :meth:`_routes`, which puts open
+        connections first.
         """
-        if not self._is_group:
-            return [self._lmp]
-        connected = [lmp for lmp in self._members
-                     if (mac := _MAC_CACHE.get(lmp)) and mac in _CLIENTS]
-        return connected + [lmp for lmp in self._members if lmp not in connected]
+        return self._members if self._is_group else [self._lmp]
 
     def _build_frame(self) -> tuple[bytes, int]:
         """Build the LMP frame from the desired state; returns (frame, cmd_id)."""
@@ -421,6 +446,8 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                     raise RuntimeError(
                         "cube did not acknowledge the command"
                     ) from err
+                if code is None:
+                    raise RuntimeError("connection closed before acknowledgement")
                 if code != 0:
                     raise RuntimeError(
                         f"cube reports error {ACK_ERRORS.get(code, code)}"
@@ -496,8 +523,10 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         for lmp in self._target_lmps():
             mac = _resolve_mac(self.hass, lmp)
             if mac is None:
-                _LOGGER.warning("%s: no BLE address found for %s",
-                                self._attr_name, lmp)
+                # Not necessarily a problem: a cube that has not advertised
+                # recently is still reachable through any open connection.
+                _LOGGER.debug("%s: no BLE address known for %s",
+                              self._attr_name, lmp)
                 continue
             if not any(mac == known for known, _ in routes):
                 routes.append((mac, lmp))
@@ -553,6 +582,15 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         reality than a blanket "off".
         """
         await super().async_added_to_hass()
+
+        # Our own payload first: unlike the plain state it also survives being
+        # switched off, which is exactly when the colour would be lost.
+        stored = await self.async_get_last_extra_data()
+        if stored is not None and self._apply_stored(stored.as_dict()):
+            _LOGGER.debug("%s: state restored from stored data (%s)",
+                          self._attr_name, self._attr_color_mode)
+            return
+
         last = await self.async_get_last_state()
         if last is None or last.state == STATE_UNAVAILABLE:
             return
@@ -613,6 +651,39 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
             "hs_color": self._attr_hs_color,
         }
 
+    @property
+    def extra_restore_state_data(self) -> ExtraStoredData:
+        """What Home Assistant should hand back after a restart."""
+        snap = self._snapshot()
+        mode = snap["color_mode"]
+        hs = snap["hs_color"]
+        return StoredCubeState({
+            "is_on": snap["is_on"],
+            "brightness": snap["brightness"],
+            "color_mode": getattr(mode, "value", mode),
+            "color_temp_kelvin": snap["color_temp_kelvin"],
+            "hs_color": list(hs) if hs else None,
+        })
+
+    def _apply_stored(self, data: dict) -> bool:
+        """Apply our own restore payload. Returns False if it is unusable."""
+        try:
+            self._attr_is_on = bool(data["is_on"])
+            if (bri := data.get("brightness")) is not None:
+                self._attr_brightness = int(bri)
+            if (kelvin := data.get("color_temp_kelvin")) is not None:
+                self._attr_color_temp_kelvin = int(kelvin)
+            if (hs := data.get("hs_color")) and len(hs) == 2:
+                self._attr_hs_color = (float(hs[0]), float(hs[1]))
+            if (mode := data.get("color_mode")) in (
+                ColorMode.HS.value, ColorMode.COLOR_TEMP.value,
+            ):
+                self._attr_color_mode = ColorMode(mode)
+        except (KeyError, TypeError, ValueError) as err:
+            _LOGGER.debug("%s: stored state unusable (%s)", self._attr_name, err)
+            return False
+        return True
+
     def _restore(self, snap: dict) -> None:
         self._attr_is_on = snap["is_on"]
         self._attr_brightness = snap["brightness"]
@@ -643,10 +714,16 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
             self._pending = False
             try:
                 await self._send()
-            except HomeAssistantError as err:
+            except Exception as err:  # noqa: BLE001
                 if self._pending:
                     continue          # a newer request is already queued
-                _LOGGER.warning("%s: %s — display rolled back",
-                                self._attr_name, err)
+                if isinstance(err, HomeAssistantError):
+                    _LOGGER.warning("%s: %s — display rolled back",
+                                    self._attr_name, err)
+                else:
+                    # Unexpected: log with a traceback so it can be fixed, but
+                    # still roll back rather than leaving a wrong state behind.
+                    _LOGGER.exception("%s: unexpected send failure",
+                                      self._attr_name)
                 self._restore(self._before_send)
                 self.async_write_ha_state()

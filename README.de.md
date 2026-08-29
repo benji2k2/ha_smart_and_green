@@ -165,6 +165,14 @@ Einordnung: Es handelt sich um ein **lokales BLE-Steuergeheimnis** – missbrauc
 nur in Funkreichweite bzw. über dein Proxy-Netz, nicht als Cloud-Zugang. Derselbe
 Schlüssel liegt ohnehin bereits im App-Export, auf dem Smartphone und in den Cubes.
 
+## Tests
+
+```bash
+python3 tests/run.py
+```
+
+Keine Home-Assistant-Installation nötig, siehe [tests/README.md](tests/README.md).
+
 ## Icons
 
 Das Integrations-Icon liegt im Repo unter

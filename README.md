@@ -162,6 +162,14 @@ For perspective: this is a **local BLE control secret**. It can only be abused
 within radio range or through your proxy network, and it is not cloud access.
 The same key already exists in the app export, on the phone, and in the cubes.
 
+## Tests
+
+```bash
+python3 tests/run.py
+```
+
+No Home Assistant install required; see [tests/README.md](tests/README.md).
+
 ## Icons
 
 The integration icon lives in `custom_components/smartgreen_cube/brand/`
