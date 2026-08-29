@@ -281,6 +281,138 @@ async def do_scan_all(seconds=10.0):
         print(f"        svc: {svcs}")
 
 
+# ---------------------------------------------------------------- Advertising
+# Opcodes aus core_lmp_opcodes.js, nur die hier interessanten.
+LMP_NAMES = {
+    0x82: "STATUS_NETWORK", 0x84: "STATUS_NETWORK_GTW_LIST",
+    0x80: "STATUS_ACK", 0x81: "STATUS_REGISTRATION", 0x83: "STATUS_HEARTBEAT",
+    0x93: "STATUS_DEVICE_DATA", 0x8F: "STATUS_DEVICE_INFO",
+    0xAF: "PARAM_MODULE_REFERENCE", 0xB0: "PARAM_MAC_ADDRESS",
+    0xB1: "PARAM_SHORT_ADDRESS", 0xB4: "PARAM_MODULE_TYPE",
+    0xB5: "PARAM_MODULE_SW_VERSION", 0xC0: "PARAM_BATTERY_LEVEL",
+    0xC2: "PARAM_RSSI",
+}
+OP_MODULE_BATTERY_STATUS_GET = 0x2D
+OP_MODULES_BATTERY_LEVEL_GET = 0x2C
+OP_MODULE_INFO_GET = 0x30
+CMD_WITH_ACK = 0x01
+
+
+def keystream(key1, nonce):
+    return AES.new(bytes(key1), AES.MODE_ECB).encrypt(bytes(nonce))
+
+
+def decode_tlv(body):
+    """Zerlegt einen entschluesselten Payload in (opcode, name, data)."""
+    out, i = [], 0
+    while i < len(body):
+        size = body[i]
+        if size == 0:
+            break
+        typ = body[i + 1]
+        out.append((typ, LMP_NAMES.get(typ, "?%#04x" % typ), bytes(body[i + 2:i + 1 + size])))
+        i += 1 + size
+    return out
+
+
+def decode_encrypted_payload(enc16, ks):
+    """XOR-entschluesseln, CRC pruefen, TLVs zurueckgeben. None bei CRC-Fehler."""
+    pay = bytes(a ^ b for a, b in zip(enc16, ks))
+    crc_rx, body = pay[0], pay[1:16]
+    crc = 0
+    for x in body:
+        crc ^= x
+    if crc != crc_rx:
+        return None
+    return decode_tlv(body)
+
+
+def decode_adv(md, ks):
+    """Linkio-Manufacturer-Data (ohne Company-ID) auswerten."""
+    if len(md) < 24:
+        return None
+    hdr, status = md[0], md[1]
+    info = {
+        "msg_type": (hdr & 0xE0) >> 5,
+        "encryption": (hdr & 0x18) >> 3,
+        "role": hdr & 0x07,
+        "registered": bool(status & 0x80),
+        "connected": bool(status & 0x01),
+        "src": "%02X:%02X" % (md[3], md[2]),
+        "seq": md[6],
+        "tlv": decode_encrypted_payload(md[8:24], ks),
+    }
+    return info
+
+
+async def do_adv(ks, seconds=12.0):
+    """Advertisements der Cubes mitlesen und entschluesseln (nur passiv)."""
+    print(f"Lese {seconds:.0f}s Advertisements (entschluesselt) ...")
+    seen = {}
+
+    def cb(device, adv):
+        md = adv.manufacturer_data.get(COMPANY_ID)
+        if md is None:
+            return
+        info = decode_adv(bytes(md), ks)
+        if info:
+            seen[device.address] = (device, adv, info)
+
+    scanner = BleakScanner(detection_callback=cb)
+    await scanner.start()
+    await asyncio.sleep(seconds)
+    await scanner.stop()
+
+    if not seen:
+        print("  Keine Linkio-Advertisements empfangen.")
+        return
+    for addr, (dev, adv, info) in sorted(seen.items(), key=lambda kv: -kv[1][1].rssi):
+        print(f"  {dev.name or '?':10} {addr}  RSSI {adv.rssi:>4}")
+        print(f"      src={info['src']} registriert={info['registered']} "
+              f"verbunden={info['connected']} seq={info['seq']}")
+        if info["tlv"] is None:
+            print("      Payload: CRC-Fehler (falscher Key?)")
+            continue
+        for typ, name, data in info["tlv"]:
+            extra = f" -> {int.from_bytes(data, 'little')}" if 0 < len(data) <= 4 else ""
+            print(f"      {name:26} {hexs(data)}{extra}")
+
+
+async def query_module(dev, ks, frames):
+    """Sendet Abfrage-Frames und dekodiert die Notify-Antworten."""
+    answers = []
+
+    def on_notify(_char, data):
+        print(f"  <- NOTIFY {hexs(data)}")
+        if len(data) >= 20:
+            tlv = decode_encrypted_payload(data[4:20], ks)
+            if tlv is None:
+                print("     (CRC-Fehler / anderes Format)")
+                return
+            for typ, name, val in tlv:
+                extra = f" -> {int.from_bytes(val, 'little')}" if 0 < len(val) <= 4 else ""
+                print(f"     {name:26} {hexs(val)}{extra}")
+                answers.append((name, bytes(val)))
+
+    async with BleakClient(dev) as client:
+        print(f"  verbunden: {client.address}")
+        await client.start_notify(CHAR_UUID, on_notify)
+        for label, fr in frames:
+            print(f"  -> {label}: {hexs(fr)}")
+            try:
+                await client.write_gatt_char(CHAR_UUID, fr, response=True)
+            except Exception:
+                await client.write_gatt_char(CHAR_UUID, fr, response=False)
+            await asyncio.sleep(3.0)
+        try:
+            await client.stop_notify(CHAR_UUID)
+        except Exception:
+            pass
+    if not answers:
+        print("  Keine auswertbare Antwort erhalten.")
+    return answers
+
+
 async def dump_gatt(dev):
     async with BleakClient(dev) as client:
         print(f"  verbunden: {client.address}")
@@ -294,8 +426,8 @@ async def dump_gatt(dev):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("action",
-                    choices=["scan", "scanall", "gatt", "redtest", "whitetest",
-                             "sweep", "on", "off"])
+                    choices=["scan", "scanall", "adv", "gatt", "battery",
+                             "redtest", "whitetest", "sweep", "on", "off"])
     ap.add_argument("--gap", action="store_true",
                     help="zwischen den Schritten ausschalten (statt direktem Wechsel)")
     ap.add_argument("--hold", type=float, default=3.0,
@@ -311,9 +443,7 @@ def main():
     key1 = conf["keyCrypt1"]
     nonce = conf["nounceAESCrypt"]
     enc_mode = conf.get("encryptionMode", 2)
-    # Key/Nonce NICHT ausgeben: Debug-Ausgaben landen erfahrungsgemäss in
-    # Bug-Reports. Zum Vergleichen genuegt ein Fingerabdruck.
-    fp = hashlib.sha256(key1 + nonce).hexdigest()[:8]
+    fp = hashlib.sha256(bytes(key1) + bytes(nonce)).hexdigest()[:8]
     print(f"encryptionMode={enc_mode}  key/nonce geladen (fingerprint {fp})")
 
     modkey = "mod_1" if args.small else "mod_0"
@@ -327,6 +457,37 @@ def main():
 
     if args.action == "scanall":
         asyncio.run(do_scan_all())
+        return
+
+    if args.action == "adv":
+        asyncio.run(do_adv(keystream(key1, nonce)))
+        return
+
+    if args.action == "battery":
+        target = mod["identification"]["lmp_addr"]
+        ks = keystream(key1, nonce)
+        # Drei Abfragen, weil unklar ist, welche das Geraet beantwortet.
+        queries = [
+            ("BATTERY_STATUS_GET (0x2D)", [1, OP_MODULE_BATTERY_STATUS_GET]),
+            ("BATTERY_LEVEL_GET (0x2C)", [1, OP_MODULES_BATTERY_LEVEL_GET]),
+            ("MODULE_INFO_GET (0x30)", [1, OP_MODULE_INFO_GET]),
+        ]
+        frames = [
+            (label, build_frame(target, payload, key1, nonce, cmd_id=i + 1,
+                                msg_type=CMD_WITH_ACK))
+            for i, (label, payload) in enumerate(queries)
+        ]
+
+        async def find_and_query():
+            dev = await find_device(target)
+            if dev is None:
+                print("Modul nicht gefunden.")
+                return False
+            await query_module(dev, ks, frames)
+            return True
+
+        if not asyncio.run(find_and_query()):
+            sys.exit(1)
         return
 
     if args.action == "gatt":

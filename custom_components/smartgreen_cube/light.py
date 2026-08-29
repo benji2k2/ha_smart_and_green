@@ -115,6 +115,27 @@ def _discover_modules(hass: HomeAssistant) -> list[dict]:
     return list(seen.values())
 
 
+async def _release_other_clients(keep: str) -> None:
+    """Trennt gehaltene Verbindungen zu *anderen* Cubes.
+
+    Ein ESP32-Proxy hat nur wenige Verbindungsslots und muss sich die Funkzeit
+    zwischen ihnen teilen. Halten wir Cube A noch 20 s offen und es kommt sofort
+    ein Befehl für Cube B, wird dessen Verbindungsaufbau ausgebremst — genau das
+    Bild "beim Wechsel dauert es lange, meist beim ersten Mal". Wir geben den
+    Funk deshalb frei, bevor wir zum naechsten Cube wechseln.
+    """
+    for other in [m for m in _CLIENTS if m != keep]:
+        if (task := _IDLE_TASKS.pop(other, None)) is not None:
+            task.cancel()
+        client = _CLIENTS.pop(other, None)
+        if client is not None and client.is_connected:
+            _LOGGER.debug("Gebe Verbindung zu %s frei (Wechsel auf %s)", other, keep)
+            try:
+                await client.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def _schedule_idle_disconnect(mac: str) -> None:
     """Trennt die Verbindung, wenn eine Weile kein Befehl mehr kam."""
     if (old := _IDLE_TASKS.pop(mac, None)) is not None:
@@ -275,6 +296,7 @@ class SmartGreenCubeLight(LightEntity):
         client = _CLIENTS.get(mac)
         fresh = False
         if client is None or not client.is_connected:
+            await _release_other_clients(mac)
             ble_device = await self._acquire_device(mac)
             if ble_device is None:
                 raise RuntimeError(

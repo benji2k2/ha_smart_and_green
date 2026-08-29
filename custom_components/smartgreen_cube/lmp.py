@@ -130,6 +130,64 @@ def build_color_payload(index: int, onoff: bool, h: float, s: float, v: float,
     return b
 
 
+# Nur die Opcodes, die tatsächlich im Advertisement auftauchen.
+_LMP_NAMES = {
+    0x80: "status_ack", 0x81: "status_registration", 0x82: "status_network",
+    0x83: "status_heartbeat", 0x84: "status_network_gateway_list",
+    0x8F: "status_device_info", 0x93: "status_device_data",
+    0xAF: "module_reference", 0xB0: "mac_address", 0xB1: "short_address",
+    0xB4: "module_type", 0xB5: "sw_version", 0xC0: "battery_level",
+    0xC2: "rssi",
+}
+
+
+def _keystream(key1: bytes, nonce: bytes) -> bytes:
+    enc = Cipher(algorithms.AES(key1), modes.ECB()).encryptor()  # noqa: S305
+    return enc.update(bytes(nonce)) + enc.finalize()
+
+
+def decode_advertisement(md: bytes, key1: bytes, nonce: bytes) -> dict | None:
+    """Wertet die Linkio-Manufacturer-Daten eines Advertisements aus.
+
+    ``md`` ist der Teil *hinter* der Company-ID, so wie HAs Bluetooth-Stack ihn
+    liefert. Der Payload ist mit demselben Verfahren wie Befehle verschlüsselt
+    (XOR mit AES-ECB über den Nonce) und durch eine XOR-Prüfsumme gesichert.
+    Rückgabe ``None``, wenn das Paket zu kurz ist oder die Prüfsumme nicht passt.
+
+    Achtung: Die Cubes senden hier ihren *Netzwerk*-Zustand — An/Aus und Farbe
+    stehen nicht darin.
+    """
+    if len(md) < 24:
+        return None
+    hdr, status = md[0], md[1]
+    payload = bytes(a ^ b for a, b in zip(md[8:24], _keystream(key1, nonce)))
+    crc_rx, body = payload[0], payload[1:16]
+    crc = 0
+    for byte in body:
+        crc ^= byte
+    if crc != crc_rx:
+        return None
+
+    fields: dict[str, str] = {}
+    i = 0
+    while i < len(body):
+        size = body[i]
+        if size == 0:
+            break
+        typ = body[i + 1]
+        data = body[i + 2:i + 1 + size]
+        fields[_LMP_NAMES.get(typ, f"opcode_{typ:#04x}")] = data.hex(" ")
+        i += 1 + size
+
+    return {
+        "src": "%02X:%02X" % (md[3], md[2]),
+        "registered": bool(status & 0x80),
+        "connected": bool(status & 0x01),
+        "role": hdr & 0x07,
+        "fields": fields,
+    }
+
+
 def _encrypt(full16: list[int], key1: bytes, nonce: bytes) -> list[int]:
     enc = Cipher(algorithms.AES(key1), modes.ECB()).encryptor()  # noqa: S305
     keystream = enc.update(bytes(nonce)) + enc.finalize()
