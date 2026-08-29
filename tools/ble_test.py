@@ -527,7 +527,7 @@ async def dump_gatt(dev):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("action",
-                    choices=["scan", "scanall", "adv", "gatt", "battery", "state", "probe", "probe2", "acktest",
+                    choices=["scan", "scanall", "adv", "gatt", "battery", "state", "probe", "probe2", "acktest", "props",
                              "redtest", "whitetest", "sweep", "on", "off"])
     ap.add_argument("--gap", action="store_true",
                     help="switch off between steps (instead of a direct transition)")
@@ -566,6 +566,32 @@ def main():
 
     if args.action == "adv":
         asyncio.run(do_adv(keystream(key1, nonce)))
+        return
+
+    if args.action == "props":
+        # MODULE_PROPERTY_GET (0x36). The module-level counterpart to the
+        # device properties we tried before; MODULE_INFO_GET (0x30) works, so
+        # module commands are served. Read-only: nothing is written here.
+        target = mod["identification"]["lmp_addr"]
+        ks = keystream(key1, nonce)
+        OP_MODULE_PROPERTY_GET = 0x36
+        names = {0: "LED status indicator", 1: "key lock", 2: "deep sleep"}
+        variants = [(f"MODULE_PROPERTY_GET {pid} ({names.get(pid, '?')})",
+                     [2, OP_MODULE_PROPERTY_GET, pid]) for pid in range(0, 4)]
+        frames = [(label, build_frame(target, payload, key1, nonce, cmd_id=i + 1,
+                                      msg_type=CMD_WITH_ACK))
+                  for i, (label, payload) in enumerate(variants)]
+
+        async def find_and_props():
+            dev = await find_device(target)
+            if dev is None:
+                print("Module not found.")
+                return False
+            await query_module(dev, ks, frames, wait=args.wait or 3.0)
+            return True
+
+        if not asyncio.run(find_and_props()):
+            sys.exit(1)
         return
 
     if args.action == "acktest":
