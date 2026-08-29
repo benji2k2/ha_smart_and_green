@@ -522,7 +522,7 @@ async def dump_gatt(dev):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("action",
-                    choices=["scan", "scanall", "adv", "gatt", "battery", "state", "probe",
+                    choices=["scan", "scanall", "adv", "gatt", "battery", "state", "probe", "probe2",
                              "redtest", "whitetest", "sweep", "on", "off"])
     ap.add_argument("--gap", action="store_true",
                     help="zwischen den Schritten ausschalten (statt direktem Wechsel)")
@@ -559,6 +559,41 @@ def main():
 
     if args.action == "adv":
         asyncio.run(do_adv(keystream(key1, nonce)))
+        return
+
+    if args.action == "probe2":
+        target = mod["identification"]["lmp_addr"]
+        ks = keystream(key1, nonce)
+        OP_DEVICE_INFO_GET = 0x32
+        OP_DEVICES_DATA_LIST_GET = 0x4A
+        OP_DEVICE_PROPERTY_GET = 0x44
+        variants = [
+            # MODULE_INFO_GET (0x30) funktioniert -> das Geraete-Gegenstueck probieren
+            ("DEVICE_INFO_GET mit Index", [2, OP_DEVICE_INFO_GET, dev_index]),
+            ("DEVICE_INFO_GET ohne Index", [1, OP_DEVICE_INFO_GET]),
+            ("DEVICES_DATA_LIST_GET", [1, OP_DEVICES_DATA_LIST_GET]),
+            ("DEVICES_DATA_LIST_GET mit Index", [2, OP_DEVICES_DATA_LIST_GET, dev_index]),
+        ]
+        # Property-IDs jenseits von 0/1 (die lieferten INVALID_PARAMETER)
+        variants += [(f"PROPERTY_GET property {pid}",
+                      [3, OP_DEVICE_PROPERTY_GET, dev_index, pid])
+                     for pid in range(2, 8)]
+
+        frames = [(label, build_frame(target, payload, key1, nonce, cmd_id=i + 1,
+                                      msg_type=CMD_WITH_ACK,
+                                      frame_type=FRAME_LOCAL_SHORT))
+                  for i, (label, payload) in enumerate(variants)]
+
+        async def find_and_probe2():
+            dev = await find_device(target)
+            if dev is None:
+                print("Modul nicht gefunden.")
+                return False
+            await query_module(dev, ks, frames, wait=args.wait or 3.0)
+            return True
+
+        if not asyncio.run(find_and_probe2()):
+            sys.exit(1)
         return
 
     if args.action == "probe":
