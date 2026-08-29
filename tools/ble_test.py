@@ -429,7 +429,7 @@ def fmt_tlv_value(data):
     return ""
 
 
-async def query_module(dev, ks, frames):
+async def query_module(dev, ks, frames, wait=3.0):
     """Sendet Abfrage-Frames und dekodiert die Notify-Antworten.
 
     Laengere Antworten kommen als MEHRERE Notifies: Byte [2] ist der Index,
@@ -447,6 +447,12 @@ async def query_module(dev, ks, frames):
         for typ, name, val in decode_tlv(stream):
             print(f"     {name:26} {hexs(val)}{fmt_tlv_value(val)}")
             answers.append((name, bytes(val)))
+            if typ == 0x80 and len(val) == 1:
+                known = {0: "SUCCESS", 1: "NOT_SUPPORTED", 2: "INVALID_COMMAND",
+                         3: "INVALID_PARAMETER", 4: "INVALID_DEVICE",
+                         5: "UNREGISTERED", 8: "TIMEOUT", 20: "ITEM_NOT_FOUND"}
+                print(f"       -> ACK {val[0]} = "
+                      f"{known.get(val[0], 'UNBEKANNT (evtl. Anzahl Datensaetze)')}")
             if typ == OP_STATUS_DEVICE_DATA:
                 st = decode_device_data(val)
                 if st:
@@ -480,7 +486,7 @@ async def query_module(dev, ks, frames):
                 await client.write_gatt_char(CHAR_UUID, fr, response=True)
             except Exception:
                 await client.write_gatt_char(CHAR_UUID, fr, response=False)
-            await asyncio.sleep(3.0)
+            await asyncio.sleep(wait)
             flush()   # unvollstaendige Antwort trotzdem zeigen
         try:
             await client.stop_notify(CHAR_UUID)
@@ -512,6 +518,8 @@ def main():
                     help="Sekunden pro Schritt (Standard 3)")
     ap.add_argument("--small", action="store_true", help="CubeSmall statt CubeLarge")
     ap.add_argument("--group", action="store_true", help="an Gruppe 'Alle' (FF:FF)")
+    ap.add_argument("--wait", type=float, default=0,
+                    help="Sekunden auf Antworten warten (state: Standard 15)")
     ap.add_argument("--h", type=float, default=285)
     ap.add_argument("--s", type=float, default=100)
     ap.add_argument("--v", type=float, default=100)
@@ -560,7 +568,7 @@ def main():
             if dev is None:
                 print("Modul nicht gefunden.")
                 return False
-            await query_module(dev, ks, frames)
+            await query_module(dev, ks, frames, wait=args.wait or 15.0)
             return True
 
         if not asyncio.run(find_and_state()):
