@@ -29,11 +29,31 @@ Die Steuerung läuft über den Bluetooth-Adapter des HA-Hosts oder einen
 ## Features
 
 - Ein `light`-Entity pro Cube: **An/Aus, Helligkeit, Farbe (HS), Farbtemperatur**
+- **Quittierte Befehle** — der Cube bestätigt jeden Schaltvorgang, verlorene
+  werden erkannt und wiederholt
+- **Zustand übersteht Neustarts** (gespeicherter Zustand statt „alles aus")
 - Optionales Gruppen-Entity **„Alle"** (Broadcast an alle Cubes)
 - **Diagnosesensoren** je Cube: Signalstärke, zuletzt gesehen, verwendeter Proxy
 - Transparente Nutzung vorhandener **ESPHome-Bluetooth-Proxys**
 - **Auto-Discovery** der Cubes per BLE-Advertisement (Company-ID `0x04AA`)
 - Schlüssel-Import direkt aus dem `.lap`-Export der App
+
+### Warum der erste Druck lange dauert
+
+Die Cubes werben nur etwa **alle 50 Sekunden** (im Feld gemessen). Eine
+BLE-Verbindung kann erst beginnen, wenn der Proxy ein solches Advertisement
+gehört hat — ein kalter Verbindungsaufbau wartet daher im Mittel eine halbe,
+schlimmstenfalls eine ganze Werbeperiode. Das ist Stromsparen in der Firmware
+und lässt sich nicht wegprogrammieren.
+
+Was die Integration tut, damit es nicht stört:
+
+- Die Anzeige schaltet **sofort** um, gesendet wird im Hintergrund — man muss
+  nicht mehrfach drücken. Bestätigt der Cube den Befehl nicht, wird die Anzeige
+  nachträglich zurückgesetzt.
+- Die Verbindung bleibt **zwei Minuten** offen, damit Folgebefehle das
+  Werbeintervall nicht erneut bezahlen.
+- Schnelle Änderungen (Ziehen am Regler) werden zusammengefasst.
 
 ### Reichweite beachten
 

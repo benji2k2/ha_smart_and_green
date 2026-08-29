@@ -17,8 +17,10 @@ from homeassistant.components.light import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.const import STATE_ON, STATE_UNAVAILABLE
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import (
     CHAR_UUID,
@@ -44,17 +46,18 @@ from .lmp import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Verbindung nach dieser Zeit ohne Befehl schließen. Ein Verbindungsaufbau über
-# einen ESPHome-Proxy dauert spürbar, deshalb halten wir sie offen — im Feldtest
-# hat sich das als zuverlässig erwiesen. Folgebefehle (Farb-/Helligkeitsregler)
-# laufen so ohne erneuten Verbindungsaufbau.
-IDLE_DISCONNECT = 20.0
+# Verbindung nach dieser Zeit ohne Befehl schließen. Grosszuegig, weil ein
+# neuer Aufbau auf das naechste Advertisement warten muss (~50 s) — jede
+# vorschnell getrennte Verbindung kostet beim naechsten Druck genau das.
+# Nicht unbegrenzt, damit die Hersteller-App wieder an die Cubes kommt.
+IDLE_DISCONNECT = 120.0
 
-# Der erste Verbindungsaufbau ist die wacklige Stelle: die Cubes werben nur
-# periodisch, und über einen ESPHome-Proxy braucht der Aufbau ein paar Anläufe.
-# Sobald die Verbindung steht, laufen Befehle zuverlässig.
-DEVICE_WAIT_TRIES = 6      # Versuche, ein verbindbares Gerät zu bekommen
-DEVICE_WAIT_DELAY = 1.5    # Sekunden zwischen den Versuchen
+# Die Cubes werben nur etwa alle 50 s (im Feld gemessen). Ein Proxy kann eine
+# Verbindung erst beginnen, wenn er ein Advertisement gehoert hat — die Geduld
+# muss daher ueber einem vollen Werbeintervall liegen. Da das Senden im
+# Hintergrund laeuft, blockiert die Wartezeit die Oberflaeche nicht.
+DEVICE_WAIT_TRIES = 30     # Versuche, ein verbindbares Gerät zu bekommen
+DEVICE_WAIT_DELAY = 2.0    # Sekunden zwischen den Versuchen
 CONNECT_ATTEMPTS = 5       # Verbindungsversuche von bleak-retry-connector
 SEND_ATTEMPTS = 3          # komplette Anläufe (inkl. Neuverbinden) pro Befehl
 RETRY_BACKOFF = 0.4        # Sekunden Pause zwischen den Anläufen
@@ -131,11 +134,11 @@ def _discover_modules(hass: HomeAssistant) -> list[dict]:
 async def _release_other_clients(keep: str) -> None:
     """Trennt gehaltene Verbindungen zu *anderen* Cubes.
 
-    Ein ESP32-Proxy hat nur wenige Verbindungsslots und muss sich die Funkzeit
-    zwischen ihnen teilen. Halten wir Cube A noch 20 s offen und es kommt sofort
-    ein Befehl für Cube B, wird dessen Verbindungsaufbau ausgebremst — genau das
-    Bild "beim Wechsel dauert es lange, meist beim ersten Mal". Wir geben den
-    Funk deshalb frei, bevor wir zum naechsten Cube wechseln.
+    Ein ESP32-Proxy hat nur wenige Verbindungsslots. Sind sie belegt, scheitert
+    der naechste Verbindungsaufbau — dann geben wir hier Platz. Aufgerufen wird
+    das erst *nach* einem Fehlschlag: vorsorglich zu trennen wuerde bei freien
+    Slots nur schaden, weil jeder neue Aufbau auf das naechste Advertisement
+    des Cubes warten muss (~50 s).
     """
     for other in [m for m in _CLIENTS if m != keep]:
         if (task := _IDLE_TASKS.pop(other, None)) is not None:
@@ -216,7 +219,7 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class SmartGreenCubeLight(LightEntity):
+class SmartGreenCubeLight(LightEntity, RestoreEntity):
     """Eine Cube-Leuchte (oder die Gruppe 'Alle').
 
     Das Gerät kennt HSV plus einen Weiß-Kanal, den die Firmware aus der
@@ -251,6 +254,9 @@ class SmartGreenCubeLight(LightEntity):
         self._is_group = is_group
         self._members = member_lmps or []
         self._cmd_id = 0
+        self._send_task: asyncio.Task | None = None
+        self._pending = False
+        self._before_send: dict = {}
 
         self._attr_name = module.get(MOD_NAME) or f"Cube {self._lmp}"
         suffix = f"group_{self._lmp}" if is_group else self._lmp
@@ -323,16 +329,31 @@ class SmartGreenCubeLight(LightEntity):
         client = _CLIENTS.get(mac)
         fresh = False
         if client is None or not client.is_connected:
-            await _release_other_clients(mac)
             ble_device = await self._acquire_device(mac)
             if ble_device is None:
                 raise RuntimeError(
                     f"BLE-Gerät {mac} meldet sich nicht (kein Advertisement)"
                 )
-            client = await establish_connection(
-                BleakClientWithServiceCache, ble_device, self._attr_name,
-                max_attempts=CONNECT_ATTEMPTS,
-            )
+            try:
+                client = await establish_connection(
+                    BleakClientWithServiceCache, ble_device, self._attr_name,
+                    max_attempts=CONNECT_ATTEMPTS,
+                )
+            except Exception:  # noqa: BLE001
+                # Moegliche Ursache: alle Verbindungsslots des Proxys belegt.
+                # Erst dann geben wir den anderen Cube frei — vorsorglich zu
+                # trennen wuerde bei freien Slots nur unnoetig Zeit kosten,
+                # weil der naechste Aufbau wieder ein Werbeintervall wartet.
+                if any(m != mac for m in _CLIENTS):
+                    _LOGGER.debug("%s: Verbindungsaufbau fehlgeschlagen, gebe "
+                                  "andere Cubes frei", self._attr_name)
+                    await _release_other_clients(mac)
+                    client = await establish_connection(
+                        BleakClientWithServiceCache, ble_device,
+                        self._attr_name, max_attempts=CONNECT_ATTEMPTS,
+                    )
+                else:
+                    raise
             _CLIENTS[mac] = client
             fresh = True
             await self._start_ack_listener(mac, client)
@@ -472,7 +493,50 @@ class SmartGreenCubeLight(LightEntity):
             "Ist ein Bluetooth-Proxy in Reichweite?"
         )
 
+    async def async_added_to_hass(self) -> None:
+        """Stellt den zuletzt bekannten Zustand wieder her.
+
+        Die Cubes lassen sich nicht auslesen (siehe README), und nach einem
+        Neustart stuende sonst jede Leuchte wieder auf "aus" — obwohl sie in
+        Wirklichkeit weiterleuchtet. Home Assistants gespeicherter Zustand ist
+        die einzige Quelle, die wir haben.
+
+        Es bleibt eine Annahme: Wurde in der Zwischenzeit ueber die
+        Hersteller-App oder am Geraet geschaltet, kann sie falsch sein. Das ist
+        aber naeher an der Wirklichkeit als ein pauschales "aus".
+        """
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        if last is None or last.state == STATE_UNAVAILABLE:
+            return
+
+        self._attr_is_on = last.state == STATE_ON
+        attrs = last.attributes
+        # Der gespeicherte Zustand kommt aus HAs Ablage und koennte aus einer
+        # aelteren Version stammen. Unbrauchbare Werte duerfen die Entity nicht
+        # am Starten hindern — dann gelten eben die Vorgabewerte.
+        try:
+            if (bri := attrs.get(ATTR_BRIGHTNESS)) is not None:
+                self._attr_brightness = int(bri)
+            if (kelvin := attrs.get(ATTR_COLOR_TEMP_KELVIN)) is not None:
+                self._attr_color_temp_kelvin = int(kelvin)
+            if (hs := attrs.get(ATTR_HS_COLOR)) is not None and len(hs) == 2:
+                self._attr_hs_color = (float(hs[0]), float(hs[1]))
+            mode = attrs.get("color_mode")
+            if mode in (ColorMode.HS, ColorMode.COLOR_TEMP):
+                self._attr_color_mode = ColorMode(mode)
+        except (TypeError, ValueError) as err:
+            _LOGGER.debug("%s: gespeicherte Werte unbrauchbar (%s)",
+                          self._attr_name, err)
+        _LOGGER.debug("%s: Zustand wiederhergestellt (%s, %s)",
+                      self._attr_name, last.state, self._attr_color_mode)
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._send_task is not None and not self._send_task.done():
+            self._send_task.cancel()
+
     async def async_turn_on(self, **kwargs: Any) -> None:
+        previous = self._snapshot()
         if ATTR_BRIGHTNESS in kwargs:
             self._attr_brightness = kwargs[ATTR_BRIGHTNESS]
         if ATTR_COLOR_TEMP_KELVIN in kwargs:
@@ -484,10 +548,58 @@ class SmartGreenCubeLight(LightEntity):
         if not self._attr_brightness:
             self._attr_brightness = 255
         self._attr_is_on = True
-        await self._send()
-        self.async_write_ha_state()
+        self._schedule_send(previous)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
+        previous = self._snapshot()
         self._attr_is_on = False
-        await self._send()
+        self._schedule_send(previous)
+
+    # ------------------------------------------------------------------ Senden
+
+    def _snapshot(self) -> dict:
+        return {
+            "is_on": self._attr_is_on,
+            "brightness": self._attr_brightness,
+            "color_mode": self._attr_color_mode,
+            "color_temp_kelvin": self._attr_color_temp_kelvin,
+            "hs_color": self._attr_hs_color,
+        }
+
+    def _restore(self, snap: dict) -> None:
+        self._attr_is_on = snap["is_on"]
+        self._attr_brightness = snap["brightness"]
+        self._attr_color_mode = snap["color_mode"]
+        self._attr_color_temp_kelvin = snap["color_temp_kelvin"]
+        self._attr_hs_color = snap["hs_color"]
+
+    def _schedule_send(self, previous: dict) -> None:
+        """Zeigt den Wunschzustand sofort an und sendet im Hintergrund.
+
+        Ein kalter Verbindungsaufbau dauert bei diesen Leuchten lange: Sie
+        werben nur etwa alle 50 Sekunden, und vorher kann kein Proxy eine
+        Verbindung beginnen. Würde der Dienstaufruf so lange blockieren, sähe
+        die Oberfläche aus, als sei nichts passiert — und man drückt erneut.
+        Deshalb schaltet die Anzeige sofort um; bestätigt der Cube den Befehl
+        nicht, nehmen wir sie nachträglich zurück.
+        """
+        if self._send_task is None or self._send_task.done():
+            self._before_send = previous
+        self._pending = True
         self.async_write_ha_state()
+        if self._send_task is None or self._send_task.done():
+            self._send_task = self.hass.async_create_task(self._send_loop())
+
+    async def _send_loop(self) -> None:
+        """Sendet, bis kein neuerer Wunsch mehr ansteht."""
+        while self._pending:
+            self._pending = False
+            try:
+                await self._send()
+            except HomeAssistantError as err:
+                if self._pending:
+                    continue          # es steht schon ein neuerer Wunsch an
+                _LOGGER.warning("%s: %s — Anzeige zurückgesetzt",
+                                self._attr_name, err)
+                self._restore(self._before_send)
+                self.async_write_ha_state()
