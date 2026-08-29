@@ -32,7 +32,9 @@ Die Steuerung läuft über den Bluetooth-Adapter des HA-Hosts oder einen
 - **Quittierte Befehle** — der Cube bestätigt jeden Schaltvorgang, verlorene
   werden erkannt und wiederholt
 - **Zustand übersteht Neustarts** (gespeicherter Zustand statt „alles aus")
-- Optionales Gruppen-Entity **„Alle"** (Broadcast an alle Cubes)
+- Optionales Gruppen-Entity **„Alle"** — ein Broadcast erreicht über das Mesh
+  alle Cubes und braucht nur *eine* Verbindung, ist also deutlich schneller als
+  einzelnes Schalten
 - **Diagnosesensoren** je Cube: Signalstärke, zuletzt gesehen, verwendeter Proxy
 - Transparente Nutzung vorhandener **ESPHome-Bluetooth-Proxys**
 - **Auto-Discovery** der Cubes per BLE-Advertisement (Company-ID `0x04AA`)
@@ -130,9 +132,9 @@ Integrations-Icons stammt aus der Original-App (RGBW-„Cube").
 
 Protokoll, Verschlüsselung, Frame-Format und Advertisement-Aufbau sind **am
 echten Gerät verifiziert**, ebenso die Steuerung im Alltag (An/Aus, Helligkeit,
-Farbe, Farbtemperatur) über einen ESPHome-Proxy. Der Gruppen-Broadcast an
-`FF:FF` ist noch ungetestet. Der Zustand ist *optimistic* — siehe „Was es (noch)
-nicht gibt". Rückmeldungen/Issues willkommen.
+Farbe, Farbtemperatur) über einen ESPHome-Proxy und der Gruppen-Broadcast an
+`FF:FF`. Der Zustand ist *optimistic* — siehe „Was es (noch) nicht gibt".
+Rückmeldungen/Issues willkommen.
 
 ## Sicherheit / Datenschutz
 

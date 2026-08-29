@@ -70,6 +70,10 @@ WEAK_RSSI = -75
 # innerhalb von Millisekunden; grosszuegig gewaehlt fuer schwache Verbindungen.
 ACK_TIMEOUT = 3.0
 
+# Gruppen-Broadcasts bleiben unquittiert, deshalb mehrfach senden.
+GROUP_REPEATS = 3
+GROUP_REPEAT_GAP = 0.2
+
 _LOCKS: dict[str, asyncio.Lock] = {}
 # Offene Quittungen: mac -> cmd_id -> Future
 _ACK_WAITERS: dict[str, dict[int, asyncio.Future]] = {}
@@ -277,7 +281,18 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         return self._cmd_id or 1
 
     def _target_lmps(self) -> list[str]:
-        return self._members if self._is_group else [self._lmp]
+        """Kandidaten, über die gesendet wird.
+
+        Ein Gruppen-Broadcast an FF:FF erreicht über das Mesh alle Cubes — es
+        genügt also *ein* Cube als Einstiegspunkt, und wir bezahlen das
+        Werbeintervall nur einmal. Bevorzugt nehmen wir einen, zu dem die
+        Verbindung schon steht: dann entfällt die Wartezeit ganz.
+        """
+        if not self._is_group:
+            return [self._lmp]
+        connected = [lmp for lmp in self._members
+                     if (mac := _MAC_CACHE.get(lmp)) and mac in _CLIENTS]
+        return connected + [lmp for lmp in self._members if lmp not in connected]
 
     def _build_frame(self) -> tuple[bytes, int]:
         """Baut das LMP-Frame aus dem gewünschten Zustand; liefert (Frame, cmd_id)."""
@@ -387,6 +402,19 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                     await client.write_gatt_char(target, frame, response=acked)
                 except Exception:  # noqa: BLE001
                     pass
+
+            # Gruppen-Broadcasts werden nicht quittiert (an FF:FF gibt es
+            # keinen eindeutigen Absender). Ein verlorenes Paket faellt daher
+            # niemandem auf — im Feld erwischte ein erster Versuch nur einen
+            # von zwei Cubes. Deshalb hier bewusst mehrfach senden.
+            if not expect_ack:
+                for _ in range(GROUP_REPEATS - 1):
+                    await asyncio.sleep(GROUP_REPEAT_GAP)
+                    try:
+                        await client.write_gatt_char(target, frame,
+                                                     response=acked)
+                    except Exception:  # noqa: BLE001
+                        break
 
             if waiter is not None:
                 try:
