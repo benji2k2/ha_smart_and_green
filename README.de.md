@@ -91,7 +91,32 @@ Was die Integration tut, damit es nicht stört:
   Hersteller-App.
 - Schnelle Änderungen (Ziehen am Regler) werden zusammengefasst.
 
-### Reichweite beachten
+#### Warum der Aufbau lange dauert und Befehle dann schnell sind
+
+Ein schwacher Link zeigt ein typisches Muster: Die erste Verbindung zieht sich,
+danach ist jeder Befehl sofort da. Das ist keine Eigenheit dieser Integration,
+sondern die Funktionsweise von BLE.
+
+**Der Verbindungsaufbau muss auf Anhieb gelingen.** Der Proxy muss ein
+Advertisement empfangen *und* seine Verbindungsanfrage muss den Cube binnen
+150 µs auf demselben Kanal erreichen. Geht eines davon verloren, ist der ganze
+Versuch hinfällig, bis das nächste Werbeereignis kommt. Advertising nutzt zudem
+nur drei feste Kanäle, von denen einer mitten im WLAN-Kanal 6 liegt — es gibt
+kein Ausweichen.
+
+**In einer bestehenden Verbindung ist es umgekehrt.** BLE springt über 37
+Datenkanäle und blendet schlechte laufend aus, und die Verbindungsschicht
+wiederholt, bis ein Paket durchkommt. Ein Verlust kostet ein
+Verbindungsintervall — Millisekunden — und keinen neuen Anlauf.
+
+Auf einem Grenzlink braucht der Aufbau also mehrere Treffer **hintereinander**
+(die Wahrscheinlichkeiten multiplizieren sich, daher die Minuten), ein Befehl
+dagegen nur **einen** Treffer irgendwann. Zwei praktische Folgen: Eine lange
+Haltezeit ist auf einem schlechten Link weit mehr wert als auf einem guten, und
+das Weiterreichen über eine bestehende Verbindung umgeht den fragilen Teil
+vollständig.
+
+## Reichweite beachten
 
 Die Cubes sind BLE-Geräte mit kleiner Antenne. Unter **−75 dBm** wird die
 Verbindung unzuverlässig: Sie kommt oft noch zustande, bricht dann aber während

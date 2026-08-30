@@ -87,6 +87,30 @@ What the integration does so it does not get in the way:
   skip the wait entirely — this is how the vendor app works too.
 - Rapid changes (dragging a slider) are coalesced into one send.
 
+### Why setup is slow but commands are fast
+
+A weak link shows a characteristic pattern: the first connection drags, then
+every command is instant. That is not a quirk of this integration, it is how
+BLE works.
+
+**Establishing a connection has to succeed in one shot.** The proxy must
+receive an advertisement *and* its connection request must reach the cube
+within 150 µs, on the same channel. Lose either and the whole attempt is void
+until the next advertising event. Advertising also uses only three fixed
+channels, one of which sits squarely in Wi-Fi channel 6 — there is nowhere to
+dodge to.
+
+**Inside a connection it is the opposite.** BLE hops across 37 data channels
+and adaptively drops the bad ones, and the link layer retransmits until a
+packet gets through. A lost packet costs one connection interval — tens of
+milliseconds — not another attempt.
+
+So on a marginal link, setup needs several consecutive successes (probabilities
+multiply, which is where minutes come from) while a command needs one eventual
+success. Two practical consequences: a longer hold time is worth far more on a
+bad link than a good one, and relaying through an existing connection avoids
+the fragile part altogether.
+
 ## Mind the range
 
 The cubes are BLE devices with a small antenna. Below **−75 dBm** the link
