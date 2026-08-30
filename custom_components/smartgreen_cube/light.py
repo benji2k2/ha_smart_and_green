@@ -82,6 +82,17 @@ ACK_TIMEOUT = 3.0
 GROUP_REPEATS = 3
 GROUP_REPEAT_GAP = 0.2
 
+# Only one connection may be built at a time. An ESP32 proxy has few slots and
+# one radio; two entities connecting at once starved each other for over two
+# minutes in the field. Serialising also means the second command usually finds
+# the first one's link already open and relays through it — LMP is a mesh, so
+# one connection serves every cube.
+_CONNECT_LOCK = asyncio.Lock()
+
+# How long a single connection attempt may take before we give up and retry.
+# Without this a doomed attempt blocked for 127s in the field.
+CONNECT_TIMEOUT = 45.0
+
 _LOCKS: dict[str, asyncio.Lock] = {}
 # Pending acknowledgements: mac -> cmd_id -> future
 _ACK_WAITERS: dict[str, dict[int, asyncio.Future]] = {}
@@ -141,6 +152,17 @@ def _discover_modules(hass: HomeAssistant) -> list[dict]:
             MOD_CLASS: DEFAULT_CLASS,
         })
     return list(seen.values())
+
+
+class _RelayAvailable(Exception):
+    """Another cube's connection came up while we waited — use that instead."""
+
+
+def _live_client_other_than(mac: str) -> str | None:
+    for other, client in _CLIENTS.items():
+        if other != mac and getattr(client, "is_connected", False):
+            return other
+    return None
 
 
 async def _release_other_clients(keep: str) -> None:
@@ -366,6 +388,44 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
             await asyncio.sleep(DEVICE_WAIT_DELAY)
         return None
 
+    async def _connect(self, mac: str, ble_device: Any, waited: float) -> Any:
+        """Open a connection, with a time limit and a slot-freeing fallback.
+
+        Must be called while holding ``_CONNECT_LOCK``.
+        """
+        started = monotonic()
+        try:
+            client = await asyncio.wait_for(
+                establish_connection(
+                    BleakClientWithServiceCache, ble_device, self._attr_name,
+                    max_attempts=CONNECT_ATTEMPTS,
+                ),
+                CONNECT_TIMEOUT,
+            )
+        except (Exception, asyncio.TimeoutError):  # noqa: BLE001
+            # Most likely the proxy has no connection slot left. Only now do we
+            # release another cube: doing it pre-emptively would drop a healthy
+            # link that the mesh could have relayed through.
+            if _live_client_other_than(mac) is None:
+                raise
+            _LOGGER.debug("%s: connection failed after %.1fs, releasing other "
+                          "cubes", self._attr_name, monotonic() - started)
+            await _release_other_clients(mac)
+            client = await asyncio.wait_for(
+                establish_connection(
+                    BleakClientWithServiceCache, ble_device, self._attr_name,
+                    max_attempts=CONNECT_ATTEMPTS,
+                ),
+                CONNECT_TIMEOUT,
+            )
+
+        _CLIENTS[mac] = client
+        _LOGGER.debug(
+            "%s: connected to %s — %.1fs waiting for a connectable device, "
+            "%.1fs establishing the link",
+            self._attr_name, mac, waited, monotonic() - started)
+        return client
+
     async def _write_once(self, mac: str, frame: bytes, cmd_id: int,
                           expect_ack: bool) -> None:
         """Write a frame and wait for the cube to acknowledge it.
@@ -387,35 +447,25 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                     f"BLE device {mac} is not responding "
                     f"(no advertisement after {waited:.1f}s)"
                 )
-            connecting = monotonic()
-            try:
-                client = await establish_connection(
-                    BleakClientWithServiceCache, ble_device, self._attr_name,
-                    max_attempts=CONNECT_ATTEMPTS,
-                )
-            except Exception:  # noqa: BLE001
-                # Likely cause: all of the proxy's connection slots are in
-                # use. Only now do we release the other cube — dropping it
-                # pre-emptively would waste time when slots are free, since
-                # the next connection has to catch an advertisement again.
-                if any(m != mac for m in _CLIENTS):
-                    _LOGGER.debug("%s: connection failed, releasing other cubes", self._attr_name)
-                    await _release_other_clients(mac)
-                    client = await establish_connection(
-                        BleakClientWithServiceCache, ble_device,
-                        self._attr_name, max_attempts=CONNECT_ATTEMPTS,
-                    )
+
+            async with _CONNECT_LOCK:
+                # Whoever held the lock may have finished in the meantime.
+                existing = _CLIENTS.get(mac)
+                if existing is not None and existing.is_connected:
+                    client = existing
+                elif (relay := _live_client_other_than(mac)) is not None:
+                    _LOGGER.debug("%s: %s came up while waiting — relaying "
+                                  "instead of opening a second connection",
+                                  self._attr_name, relay)
+                    raise _RelayAvailable
                 else:
-                    raise
-            _CLIENTS[mac] = client
-            fresh = True
-            _LOGGER.debug(
-                "%s: connected to %s — %.1fs waiting for a connectable device, "
-                "%.1fs establishing the link",
-                self._attr_name, mac, waited, monotonic() - connecting)
-            await self._start_ack_listener(mac, client)
+                    client = await self._connect(mac, ble_device, waited)
+                    fresh = True
+            if fresh:
+                await self._start_ack_listener(mac, client)
 
         waiter: asyncio.Future | None = None
+
         if expect_ack and _ACK_ACTIVE.get(mac):
             waiter = asyncio.get_running_loop().create_future()
             _ACK_WAITERS.setdefault(mac, {})[cmd_id] = waiter
@@ -552,35 +602,52 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         return routes
 
     async def _send(self) -> None:
-        """Send the current state over the best available route."""
+        """Send the current state over the best available route.
+
+        Two passes: if another cube's connection came up while we waited for
+        the connect lock, the routes are recomputed so the frame goes through
+        that link instead of opening a second one.
+        """
         frame, cmd_id = self._build_frame()
         _LOGGER.debug("%s: sending %s", self._attr_name, frame.hex(" "))
 
         last_err: Exception | None = None
-        for mac, lmp in self._routes():
-            self._log_link_quality(mac)
-            async with _lock_for(mac):
-                for attempt in range(1, SEND_ATTEMPTS + 1):
-                    try:
-                        started = monotonic()
-                        await self._write_once(mac, frame, cmd_id,
-                                              expect_ack=not self._is_group)
-                        _LOGGER.debug("%s: frame sent (attempt %d, %s) "
-                                      "in %.1fs", self._attr_name, attempt,
-                                      mac, monotonic() - started)
-                        return
-                    except Exception as err:  # noqa: BLE001
-                        last_err = err
-                        _LOGGER.warning("%s: attempt %d/%d via %s failed: %s",
-                                        self._attr_name, attempt, SEND_ATTEMPTS,
-                                        mac, err)
-                        await _drop_client(mac)
-                        if attempt == 1 and lmp is not None:
-                            _MAC_CACHE.pop(lmp, None)
-                            if (mac2 := _resolve_mac(self.hass, lmp)) and mac2 != mac:
-                                mac = mac2
-                        if attempt < SEND_ATTEMPTS:
-                            await asyncio.sleep(RETRY_BACKOFF)
+        for _pass in range(2):
+            relay_appeared = False
+            for mac, lmp in self._routes():
+                self._log_link_quality(mac)
+                async with _lock_for(mac):
+                    for attempt in range(1, SEND_ATTEMPTS + 1):
+                        try:
+                            started = monotonic()
+                            await self._write_once(
+                                mac, frame, cmd_id,
+                                expect_ack=not self._is_group)
+                            _LOGGER.debug("%s: frame sent (attempt %d, %s) "
+                                          "in %.1fs", self._attr_name, attempt,
+                                          mac, monotonic() - started)
+                            return
+                        except _RelayAvailable:
+                            relay_appeared = True
+                            break
+                        except Exception as err:  # noqa: BLE001
+                            last_err = err
+                            _LOGGER.warning(
+                                "%s: attempt %d/%d via %s failed: %s",
+                                self._attr_name, attempt, SEND_ATTEMPTS,
+                                mac, err)
+                            await _drop_client(mac)
+                            if attempt == 1 and lmp is not None:
+                                _MAC_CACHE.pop(lmp, None)
+                                mac2 = _resolve_mac(self.hass, lmp)
+                                if mac2 and mac2 != mac:
+                                    mac = mac2
+                            if attempt < SEND_ATTEMPTS:
+                                await asyncio.sleep(RETRY_BACKOFF)
+                if relay_appeared:
+                    break
+            if not relay_appeared:
+                break
 
         if last_err is not None:
             raise HomeAssistantError(

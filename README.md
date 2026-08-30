@@ -47,18 +47,21 @@ hex strings. Control runs through the HA host's Bluetooth adapter or an
 
 ## Why the first press takes a while
 
-The cubes advertise about **every 11 seconds** (derived from the sequence
-counter in their advertisements, across two devices on two days). A BLE
-connection cannot begin until the proxy has heard such an advertisement, so a
-cold connect should take roughly five seconds.
+Measured with the integration's own timing: **waiting for an advertisement is
+not the problem** — Home Assistant offered a connectable device within 0.0 s in
+every observed case. The entire delay sits in *establishing the link* through
+the proxy.
 
-In practice it took **27–30 seconds** in the field, because the proxy received
-only **8–25 %** of the advertisements. With a device that advertises rarely,
-every missed packet costs another full interval. The lever is the proxy's scan
-duty cycle — see `esp32_ble_tracker: scan_parameters:` in ESPHome, where a
-`window` well below `interval` means the receiver is listening only a fraction
-of the time. The default suits devices that advertise many times per second,
-not these.
+Two things make that slow, and both are addressed:
+
+- **Competing connections.** Two cubes commanded shortly after one another used
+  to open two connections at once and starve each other on the proxy's few
+  slots — one attempt burned 127 s before succeeding in 15 s after the other
+  was evicted. Connections are now built one at a time, and a command that
+  finds another cube's link already open relays through it instead.
+- **Weak signal.** Attempts were logged at −87 and −96 dBm. Near the noise
+  floor the link layer needs many retries or fails outright. No amount of
+  software fixes that; the proxy has to be closer.
 
 What the integration does so it does not get in the way:
 

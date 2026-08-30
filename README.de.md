@@ -46,18 +46,22 @@ Die Steuerung läuft über den Bluetooth-Adapter des HA-Hosts oder einen
 
 ### Warum der erste Druck lange dauert
 
-Die Cubes werben etwa **alle 11 Sekunden** (aus dem Sequenzzähler ihrer
-Advertisements ermittelt, über zwei Geräte an zwei Tagen). Eine BLE-Verbindung
-kann erst beginnen, wenn der Proxy ein solches Advertisement gehört hat — ein
-kalter Verbindungsaufbau sollte also rund fünf Sekunden dauern.
+Mit der eigenen Zeitmessung der Integration nachgewiesen: **Das Warten auf ein
+Advertisement ist nicht das Problem** — Home Assistant hatte in allen
+beobachteten Fällen binnen 0,0 s ein verbindbares Gerät. Die gesamte Verzögerung
+steckt im *Aufbau der Verbindung* über den Proxy.
 
-Im Feld waren es **27–30 Sekunden**, weil der Proxy nur **8–25 %** der
-Advertisements empfangen hat. Bei einem Gerät, das selten wirbt, kostet jedes
-verpasste Paket ein weiteres volles Intervall. Der Hebel ist die Einschaltdauer
-des Empfängers — siehe `esp32_ble_tracker: scan_parameters:` in ESPHome: Ein
-`window` deutlich unter `interval` bedeutet, dass der Proxy nur einen Bruchteil
-der Zeit zuhört. Die Voreinstellung passt zu Geräten, die mehrmals pro Sekunde
-werben, nicht zu diesen.
+Zwei Dinge machen ihn langsam, beide sind adressiert:
+
+- **Konkurrierende Verbindungen.** Zwei kurz nacheinander geschaltete Cubes
+  bauten bisher gleichzeitig zwei Verbindungen auf und nahmen sich gegenseitig
+  die wenigen Slots des Proxys weg — ein Versuch verbrannte 127 s und war nach
+  dem Rauswurf des anderen in 15 s erfolgreich. Verbindungen werden jetzt
+  nacheinander aufgebaut, und ein Befehl, der die Verbindung des anderen Cubes
+  offen vorfindet, läuft darüber.
+- **Schwaches Signal.** Die Versuche liefen bei −87 und −96 dBm. Nahe dem
+  Rauschpegel braucht die Verbindungsschicht viele Wiederholungen oder scheitert
+  ganz. Das lässt sich nicht in Software beheben; der Proxy muss näher.
 
 Was die Integration tut, damit es nicht stört:
 

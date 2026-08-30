@@ -23,6 +23,9 @@ def reset_module_state() -> None:
     for store in (light._CLIENTS, light._ACK_WAITERS, light._ACK_ACTIVE,
                   light._MAC_CACHE, light._LOCKS, light._IDLE_TASKS):
         store.clear()
+    # Home Assistant has a single event loop; the test runner gives each test
+    # its own, so the module-level lock has to be rebuilt for the new one.
+    light._CONNECT_LOCK = asyncio.Lock()
 
 
 class FakeHass:
@@ -64,6 +67,10 @@ class Light(light.SmartGreenCubeLight):
 
     async def async_get_last_extra_data(self):
         return self._last_extra
+
+    async def _acquire_device(self, mac):
+        """Home Assistant is stubbed out, so hand back a placeholder at once."""
+        return object()
 
 
 async def write(entity: Light, cube: FakeCube, cmd_id: int = 1,
@@ -470,3 +477,86 @@ async def test_hold_time_is_actually_applied():
     await asyncio.sleep(0.15)
     assert cube.disconnected, "the connection should have been closed by now"
     assert MAC not in light._CLIENTS
+
+
+# --------------------------------------------- competing connection attempts
+
+async def test_second_cube_relays_instead_of_connecting_in_parallel():
+    """Regression: two cubes starved each other for over two minutes.
+
+    Field log: CubeLarge spent 127s failing to connect while CubeSmall held the
+    proxy's slot; only after evicting CubeSmall did it succeed, in 15s. Since
+    LMP is a mesh, the second command should have waited briefly and then gone
+    through the first cube's link instead of competing for a second one.
+    """
+    reset_module_state()
+    light._MAC_CACHE.update({"13:40": MAC, "41:E0": OTHER_MAC})
+
+    # CubeLarge holds the connect lock, mimicking a slow connect that
+    # eventually succeeds and registers its client.
+    entity = Light("13:40")
+
+    async def slow_connect():
+        async with light._CONNECT_LOCK:
+            await asyncio.sleep(0.05)
+            light._CLIENTS[OTHER_MAC] = FakeCube(KEYSTREAM)
+
+    holder = asyncio.get_event_loop().create_task(slow_connect())
+    await asyncio.sleep(0)          # let it take the lock
+
+    # CubeSmall now wants its own connection; it must yield to the relay.
+    frame, cmd_id = entity._build_frame()
+    try:
+        await entity._write_once(MAC, frame, cmd_id, expect_ack=False)
+    except light._RelayAvailable:
+        pass
+    else:
+        raise AssertionError("should have deferred to the existing connection")
+    finally:
+        await holder
+
+    assert MAC not in light._CLIENTS, "no second connection may be opened"
+
+
+async def test_connect_lock_serialises_attempts():
+    """Only one connection may be built at a time."""
+    reset_module_state()
+    order = []
+
+    async def worker(name):
+        async with light._CONNECT_LOCK:
+            order.append(f"{name}-start")
+            await asyncio.sleep(0.02)
+            order.append(f"{name}-end")
+
+    await asyncio.gather(worker("a"), worker("b"))
+    assert order in (["a-start", "a-end", "b-start", "b-end"],
+                     ["b-start", "b-end", "a-start", "a-end"]), order
+
+
+async def test_connect_has_a_time_limit():
+    """A doomed attempt must not block for minutes; it blocked 127s in the field."""
+    assert light.CONNECT_TIMEOUT <= 60, "a stuck connect has to be cut short"
+
+    reset_module_state()
+    entity = Light("13:40")
+    light.CONNECT_TIMEOUT = 0.05
+
+    async def never_connects(*args, **kwargs):
+        await asyncio.sleep(10)
+
+    original = light.establish_connection
+    light.establish_connection = never_connects
+    try:
+        async with light._CONNECT_LOCK:
+            pass
+        started = asyncio.get_event_loop().time()
+        try:
+            await entity._connect(MAC, object(), 0.0)
+        except (asyncio.TimeoutError, Exception):
+            pass
+        elapsed = asyncio.get_event_loop().time() - started
+        assert elapsed < 1.0, f"gave up only after {elapsed:.1f}s"
+    finally:
+        light.establish_connection = original
+        light.CONNECT_TIMEOUT = 45.0
