@@ -63,9 +63,12 @@ Zwei Dinge machen ihn langsam, beide sind adressiert:
   Rauschpegel braucht eine Verbindung mehr Wiederholungen und bricht öfter ab,
   ein näherer Proxy hilft also.
 
-  Spätere Messungen relativieren das: Mit serialisierten Verbindungen stand der
-  Link in drei kalten Durchläufen nach 0,3–4,2 s — bei −90 bis −95 dBm. Auf
-  diese Entfernungen war nicht das Signal die Ursache für träges Schalten.
+  Messungen relativieren das: Durch Dreifachverglasung bei −89 bis −92 dBm
+  brauchten drei kalte Durchläufe **2,1 s, 2,9 s und 3,9 s** vom Befehl bis zum
+  gesendeten Frame, jeweils im ersten Versuch. Das schwache Signal war hier nie
+  die Ursache für träges Schalten — eine Reihe von Softwarefehlern war es, und
+  der schlechteste Fall sank von 142 s auf unter 4 s, ohne dass sich am
+  Funkweg etwas geändert hätte.
 
   Beim Lesen der Signalstärke Vorsicht: Sie wird an *angekommenen*
   Advertisements gemessen. Durch ein Hindernis gehen die schwachen verloren und

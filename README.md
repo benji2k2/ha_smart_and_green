@@ -63,9 +63,11 @@ Two things make that slow, and both are addressed:
   floor a link needs more retries and drops more often, so a proxy closer to
   the cube helps.
 
-  Later measurement put this in perspective: with connections serialised, the
-  link came up in 0.3–4.2 s at −90 to −95 dBm across three cold runs. At these
-  distances the signal was not what made switching slow.
+  Measurement put this in perspective. Through triple glazing at −89 to
+  −92 dBm, three cold runs took **2.1 s, 2.9 s and 3.9 s** from command to
+  frame sent, each on the first attempt. Weak signal was never what made
+  switching slow here; a series of software faults was, and the worst case came
+  down from 142 s to under 4 s without the radio path changing at all.
 
   Be careful reading RSSI here: it is measured on advertisements that *arrived*.
   Through an obstacle the weak ones are lost and only the lucky ones are
