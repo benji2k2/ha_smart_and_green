@@ -37,7 +37,9 @@ Die Steuerung läuft über den Bluetooth-Adapter des HA-Hosts oder einen
 - Optionales Gruppen-Entity **„Alle"** — ein Broadcast erreicht über das Mesh
   alle Cubes und braucht nur *eine* Verbindung, ist also deutlich schneller als
   einzelnes Schalten
-- **Diagnosesensoren** je Cube: Signalstärke, zuletzt gesehen, verwendeter Proxy
+- **Diagnosesensoren** je Cube: Signalstärke, zuletzt gesehen, verwendeter
+  Proxy sowie die Modul-Schalter (Status-LED, Tastensperre, Tiefschlaf) aus der
+  importierten Konfiguration — alles ohne je eine Verbindung aufzubauen
 - Transparente Nutzung vorhandener **ESPHome-Bluetooth-Proxys**
 - **Auto-Discovery** der Cubes per BLE-Advertisement (Company-ID `0x04AA`)
 - Schlüssel-Import direkt aus dem `.lap`-Export der App
@@ -98,6 +100,19 @@ Cube — Home Assistant wählt automatisch den mit dem besten Empfang.
   Quelltext auskommentiert. LMP ist ein Plattform-Protokoll, das auch
   Batteriesensoren abdeckt — die Opcodes existieren, dieses Gerät setzt sie
   nur nicht um.
+
+### Hinweis zu den Modul-Schaltern
+
+Status-LED, Tastensperre und Tiefschlaf stammen aus der **importierten
+Konfiguration** — einer Momentaufnahme vom Zeitpunkt des Exports. Die Cubes
+senden diese Einstellungen nicht, und sie live abzufragen würde zusätzliche
+Frames auf die Funkstrecke bringen; das unterlässt die Integration bewusst.
+Jede Entität trägt ein `source`-Attribut, das darauf hinweist. Für die
+aktuellen Werte auf Zuruf: `tools/ble_test.py props`.
+
+Tiefschlaf ist absichtlich **kein** Schalter. Die App schaltet ihn nur ein, und
+ein Cube im Tiefschlaf erwacht ausschließlich durch einen Tastendruck am Gerät
+— eine fehlgeleitete Automatisierung würde die Lampe unerreichbar machen.
 
 ## Voraussetzungen
 

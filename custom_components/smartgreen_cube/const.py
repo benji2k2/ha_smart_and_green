@@ -21,6 +21,17 @@ MOD_CLASS = "class"
 MOD_SW = "sw_version"
 MOD_HW = "hw_version"
 MOD_MODEL = "model"
+MOD_PROPS = "properties"
+
+# Module properties, as the app addresses them (MODULE_PROPERTY_SET/GET).
+PROP_LED_STATUS = 0
+PROP_KEY_LOCK = 1
+PROP_DEEP_SLEEP = 2
+PROP_NAMES = {
+    PROP_LED_STATUS: "led_status",
+    PROP_KEY_LOCK: "key_lock",
+    PROP_DEEP_SLEEP: "deep_sleep",
+}
 
 # LMP protocol
 DEFAULT_CLASS = 19  # color-white-dimmable-light

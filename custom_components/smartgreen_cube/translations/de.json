@@ -47,6 +47,17 @@
       "proxy": {
         "name": "Bluetooth-Proxy"
       }
+    },
+    "binary_sensor": {
+      "led_status": {
+        "name": "Status-LED"
+      },
+      "key_lock": {
+        "name": "Tastensperre"
+      },
+      "deep_sleep": {
+        "name": "Tiefschlaf"
+      }
     }
   }
 }

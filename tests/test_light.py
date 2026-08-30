@@ -378,3 +378,58 @@ async def test_nothing_stored_keeps_the_defaults():
     unavailable._attr_brightness = 77
     await unavailable.async_added_to_hass()
     assert unavailable._attr_brightness == 77
+
+
+# ------------------------------------------------------- module property flags
+
+async def test_property_flags_come_from_the_configuration():
+    """Zero radio cost: the values are read from the imported .lap file."""
+    binary_sensor = sg.binary_sensor
+    module = {
+        "lmp_addr": "13:40",
+        "name": "CubeSmall",
+        "properties": {"led_status": True, "key_lock": True, "deep_sleep": False},
+    }
+    entry = type("Entry", (), {"entry_id": "abc", "data": {"modules": [module]}})()
+
+    created = []
+    await binary_sensor.async_setup_entry(None, entry, created.extend)
+
+    assert len(created) == 3
+    by_key = {e._attr_translation_key: e for e in created}
+    assert by_key["led_status"].is_on is True
+    assert by_key["deep_sleep"].is_on is False
+    assert "snapshot" in by_key["key_lock"].extra_state_attributes["source"], \
+        "the value must be labelled as a snapshot, not passed off as live"
+
+
+async def test_property_flags_are_skipped_when_unknown():
+    """Configurations without these fields must not produce empty entities."""
+    binary_sensor = sg.binary_sensor
+    module = {"lmp_addr": "13:40", "name": "CubeSmall",
+              "properties": {"led_status": None, "key_lock": None,
+                             "deep_sleep": None}}
+    entry = type("Entry", (), {"entry_id": "abc", "data": {"modules": [module]}})()
+    created = []
+    await binary_sensor.async_setup_entry(None, entry, created.extend)
+    assert created == []
+
+    no_props = {"lmp_addr": "13:40", "name": "CubeSmall"}
+    entry2 = type("Entry", (), {"entry_id": "a", "data": {"modules": [no_props]}})()
+    created2 = []
+    await binary_sensor.async_setup_entry(None, entry2, created2.extend)
+    assert created2 == []
+
+
+async def test_diagnostics_never_open_a_connection():
+    """The whole point: diagnostics must cost no battery.
+
+    Only the command path may connect. If a future change makes a sensor
+    connect, this fails.
+    """
+    component = conftest.COMPONENT
+    for name in ("sensor.py", "binary_sensor.py"):
+        source = (component / name).read_text()
+        for forbidden in ("establish_connection", "BleakClient", "write_gatt_char",
+                          "start_notify"):
+            assert forbidden not in source, f"{name} must not use {forbidden}"

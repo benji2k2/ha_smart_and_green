@@ -205,6 +205,31 @@ ACK_ERRORS = {
 }
 _OP_STATUS_ACK = 0x80
 
+def parse_frame(data: bytes, key1: bytes, nonce: bytes) -> tuple[int, list[tuple[int, bytes]]] | None:
+    """Decrypt a 20-byte reply into ``(cmd_id, [(opcode, payload), ...])``.
+
+    Returns ``None`` when the frame is too short or the checksum fails.
+    """
+    if len(data) < 20:
+        return None
+    payload = bytes(a ^ b for a, b in zip(data[4:20], _keystream(key1, nonce)))
+    crc_rx, body = payload[0], payload[1:16]
+    crc = 0
+    for byte in body:
+        crc ^= byte
+    if crc != crc_rx:
+        return None
+
+    items: list[tuple[int, bytes]] = []
+    i = 0
+    while i < len(body):
+        size = body[i]
+        if size == 0:
+            break
+        items.append((body[i + 1], bytes(body[i + 2:i + 1 + size])))
+        i += 1 + size
+    return data[1], items
+
 
 def parse_ack(data: bytes, key1: bytes, nonce: bytes) -> tuple[int, int] | None:
     """Decode a notify reply into ``(cmd_id, error_code)``.
@@ -213,19 +238,14 @@ def parse_ack(data: bytes, key1: bytes, nonce: bytes) -> tuple[int, int] | None:
     the device. Returns ``None`` if the packet is not an acknowledgement (a
     status frame, say) or the checksum does not match.
     """
-    if len(data) < 20:
+    parsed = parse_frame(data, key1, nonce)
+    if parsed is None:
         return None
-    cmd_id = data[1]
-    payload = bytes(a ^ b for a, b in zip(data[4:20], _keystream(key1, nonce)))
-    crc_rx, body = payload[0], payload[1:16]
-    crc = 0
-    for byte in body:
-        crc ^= byte
-    if crc != crc_rx:
-        return None
-    if body[0] < 2 or body[1] != _OP_STATUS_ACK:
-        return None
-    return cmd_id, body[2]
+    cmd_id, items = parsed
+    for opcode, payload in items:
+        if opcode == _OP_STATUS_ACK and payload:
+            return cmd_id, payload[0]
+    return None
 
 
 def build_frame(lmp_addr: str, payload: list[int], key1: bytes, nonce: bytes,

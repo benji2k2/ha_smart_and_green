@@ -15,12 +15,17 @@ from typing import Any
 
 from .const import (
     DEFAULT_CLASS,
+    PROP_DEEP_SLEEP,
+    PROP_KEY_LOCK,
+    PROP_LED_STATUS,
+    PROP_NAMES,
     MOD_CLASS,
     MOD_HW,
     MOD_INDEX,
     MOD_LMP,
     MOD_MODEL,
     MOD_NAME,
+    MOD_PROPS,
     MOD_SW,
 )
 
@@ -134,6 +139,7 @@ def extract_modules(config: list[dict[str, Any]]) -> tuple[list[dict], dict | No
             index = dev.get("identification", {}).get("index", 0)
             cls = dev.get("identification", {}).get("type", {}).get("class_id", DEFAULT_CLASS)
         infos = val.get("infos", {})
+        state = val.get("state", {})
         modules.append({
             MOD_NAME: ident.get("name", f"Cube {lmp}"),
             MOD_LMP: lmp,
@@ -142,6 +148,14 @@ def extract_modules(config: list[dict[str, Any]]) -> tuple[list[dict], dict | No
             MOD_SW: _version_str(infos.get("firmware_version")),
             MOD_HW: _version_str(infos.get("hardware_version")),
             MOD_MODEL: infos.get("model_name") or None,
+            # The app's last known module settings. Only a snapshot from the
+            # export, but the device does not broadcast them, so it is the
+            # baseline until a live read succeeds.
+            MOD_PROPS: {
+                PROP_NAMES[PROP_LED_STATUS]: state.get("ledStatusModeEnabled"),
+                PROP_NAMES[PROP_KEY_LOCK]: state.get("physicalLockModeEnabled"),
+                PROP_NAMES[PROP_DEEP_SLEEP]: state.get("deepSleepModeEnabled"),
+            },
         })
 
     group = None

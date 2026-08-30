@@ -62,6 +62,12 @@ def _install_stubs() -> None:
             async_discovered_service_info=lambda *a, **k: [],
             async_last_service_info=lambda *a, **k: None,
             async_ble_device_from_address=lambda *a, **k: None)
+    # Home Assistant's Entity exposes _attr_* through properties; the tests
+    # rely on that, so the stub does the same.
+    _module("homeassistant.components.binary_sensor",
+            BinarySensorEntity=type("BinarySensorEntity", (), {
+                "is_on": property(lambda self: getattr(self, "_attr_is_on", None)),
+            }))
     _module("homeassistant.components.light",
             ATTR_BRIGHTNESS="brightness",
             ATTR_COLOR_TEMP_KELVIN="color_temp_kelvin",
@@ -97,7 +103,8 @@ def load() -> types.ModuleType:
     pkg.__path__ = [str(COMPONENT)]
     sys.modules["sg"] = pkg
 
-    for name in ("const", "lmp", "device", "lap", "light", "sensor"):
+    for name in ("const", "lmp", "device", "lap", "light", "sensor",
+                 "binary_sensor"):
         source = (COMPONENT / f"{name}.py").read_text().replace("from .", "from sg.")
         module = types.ModuleType(f"sg.{name}")
         module.__package__ = "sg"

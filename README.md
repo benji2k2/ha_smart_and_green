@@ -38,7 +38,9 @@ hex strings. Control runs through the HA host's Bluetooth adapter or an
 - Optional **"All" group entity** — one broadcast reaches every cube through the
   mesh and needs only *one* connection, so it is markedly faster than switching
   each cube in turn
-- **Diagnostic sensors** per cube: signal strength, last seen, proxy in use
+- **Diagnostic sensors** per cube: signal strength, last seen, proxy in use,
+  plus the module flags (status LED, key lock, deep sleep) from the imported
+  configuration — all read without ever opening a connection
 - Transparent use of existing **ESPHome Bluetooth proxies**
 - **Auto-discovery** via BLE advertisement (company id `0x04AA`)
 - Key import straight from the app's `.lap` export
@@ -97,6 +99,19 @@ the cube — Home Assistant automatically picks the one with the best reception.
   that nothing ever emits, and its battery display is commented out in the
   source. LMP is a platform protocol covering battery sensors too, so the
   opcodes exist — this particular device just does not implement them.
+
+### A note on the module flags
+
+Status LED, key lock and deep sleep are shown from the **imported
+configuration**, which is a snapshot taken when the export was made. The cubes
+do not broadcast these settings, and reading them live would mean putting extra
+frames on the wire — so the integration deliberately does not. Each entity
+carries a `source` attribute saying so. To read the current values on demand,
+use `tools/ble_test.py props`.
+
+Deep sleep is deliberately not exposed as a switch. The app only ever *enables*
+it, and a cube in deep sleep wakes solely on a physical button press — a stray
+automation would strand the lamp.
 
 ## Requirements
 
