@@ -81,9 +81,12 @@ _WEAK_WARNED: dict[str, float] = {}
 # arrived within milliseconds; generous here for weak connections.
 ACK_TIMEOUT = 3.0
 
-# Group broadcasts are never acknowledged, so send them more than once.
-GROUP_REPEATS = 3
-GROUP_REPEAT_GAP = 0.2
+# Whenever a frame cannot be verified — a group broadcast, or a connection
+# whose subscription did not come up — send it more than once. A single
+# unverified write is the weakest thing this integration does, and it happens
+# precisely when the link is already struggling.
+UNVERIFIED_REPEATS = 3
+UNVERIFIED_REPEAT_GAP = 0.2
 
 # Only one connection may be built at a time. An ESP32 proxy has few slots and
 # one radio; two entities connecting at once starved each other for over two
@@ -545,13 +548,13 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                 except Exception:  # noqa: BLE001
                     pass
 
-            # Group broadcasts are not acknowledged (FF:FF has no single
-            # sender to answer), so a lost packet goes unnoticed — in the field
-            # a first attempt reached only one of two cubes. Hence sending
-            # deliberately more than once.
-            if not expect_ack:
-                for _ in range(GROUP_REPEATS - 1):
-                    await asyncio.sleep(GROUP_REPEAT_GAP)
+            # Nothing will tell us whether this arrived: either it is a group
+            # broadcast (FF:FF has no single sender to answer) or the
+            # subscription did not come up. In the field a single unverified
+            # broadcast reached only one of two cubes, so send it again.
+            if waiter is None:
+                for _ in range(UNVERIFIED_REPEATS - 1):
+                    await asyncio.sleep(UNVERIFIED_REPEAT_GAP)
                     try:
                         await client.write_gatt_char(target, frame,
                                                      response=acked)

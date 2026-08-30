@@ -154,19 +154,23 @@ async def test_closing_a_connection_does_not_kill_the_waiting_send():
 async def test_group_broadcast_is_repeated_and_never_awaits_an_ack():
     """FF:FF cannot be acknowledged, so the frame is sent more than once."""
     reset_module_state()
-    light.GROUP_REPEAT_GAP = 0.01
+    light.UNVERIFIED_REPEAT_GAP = 0.01
     cube = FakeCube(KEYSTREAM, answer=False)
     await write(Light("FF:FF", is_group=True, members=["13:40"]), cube,
                 expect_ack=False)
-    assert len(cube.writes) == light.GROUP_REPEATS
+    assert len(cube.writes) == light.UNVERIFIED_REPEATS
 
 
 async def test_write_falls_back_when_notifications_are_unavailable():
-    """Without notifications we cannot verify, but must not fail either."""
+    """Without notifications we cannot verify, but must not fail either.
+
+    The frame is repeated in that case: nothing will report it missing, so a
+    single write would be the one unguarded path through this code.
+    """
     reset_module_state()
     cube = FakeCube(KEYSTREAM, notify_error=RuntimeError("no notify"))
     await write(Light(), cube)
-    assert len(cube.writes) == 1
+    assert len(cube.writes) == light.UNVERIFIED_REPEATS
     assert light._ACK_ACTIVE.get(MAC) is False
 
 
@@ -798,3 +802,50 @@ async def test_a_timeout_never_discards_the_gatt_cache():
     assert not light._looks_like_stale_cache(asyncio.TimeoutError())
     assert light._looks_like_stale_cache(
         RuntimeError("subscription refused: Insufficient authorization (8)"))
+
+
+async def test_an_unverifiable_command_is_repeated_too():
+    """A single cube whose subscription failed had no safety net at all.
+
+    The repeat used to be tied to group broadcasts. But a command that cannot
+    be confirmed is equally exposed however it got that way — and a failed
+    subscription means the link is already struggling.
+    """
+    reset_module_state()
+    light.UNVERIFIED_REPEAT_GAP = 0.01
+    light.NOTIFY_TIMEOUT = 0.05
+
+    class Slow(FakeCube):
+        async def start_notify(self, uuid, callback):
+            await asyncio.sleep(5)
+
+    cube = Slow(KEYSTREAM)
+
+    async def connect(mac, device, waited):
+        light._CLIENTS[mac] = cube
+        return cube
+
+    entity = Light()          # a single cube, not a group
+    entity._connect = connect
+    frame, cmd_id = entity._build_frame()
+    try:
+        await entity._write_once(MAC, frame, cmd_id, expect_ack=True,
+                                 strict=True)
+        # One write, one fresh-connection repeat, then the unverified repeats.
+        assert len(cube.writes) >= light.UNVERIFIED_REPEATS, \
+            f"only {len(cube.writes)} writes for an unverifiable command"
+    finally:
+        light.NOTIFY_TIMEOUT = 5.0
+        light.UNVERIFIED_REPEAT_GAP = 0.2
+
+
+async def test_a_verified_command_is_sent_once():
+    """Verification makes repeats pointless — do not double the traffic."""
+    reset_module_state()
+    cube = FakeCube(KEYSTREAM, code=0)
+    light._CLIENTS[MAC] = cube
+    entity = Light()
+    await entity._start_ack_listener(MAC, cube)
+    frame, cmd_id = entity._build_frame()
+    await entity._write_once(MAC, frame, cmd_id, expect_ack=True)
+    assert len(cube.writes) == 1, f"{len(cube.writes)} writes despite an ack"
