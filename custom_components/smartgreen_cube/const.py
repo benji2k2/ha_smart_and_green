@@ -19,6 +19,11 @@ DEFAULT_IDLE_DISCONNECT = 120  # seconds
 MIN_IDLE_DISCONNECT = 0        # 0 disconnects right after each command
 MAX_IDLE_DISCONNECT = 3600
 
+CONF_CONFIRM_WAIT = "confirm_wait"
+DEFAULT_CONFIRM_WAIT = 4       # seconds
+MIN_CONFIRM_WAIT = 0           # 0 shows the new state immediately
+MAX_CONFIRM_WAIT = 30
+
 # Module dict fields
 MOD_NAME = "name"
 MOD_LMP = "lmp_addr"

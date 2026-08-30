@@ -30,12 +30,14 @@ from homeassistant.helpers.restore_state import (
 from .const import (
     CHAR_UUID,
     COMPANY_ID,
+    CONF_CONFIRM_WAIT,
     CONF_GROUP,
     CONF_IDLE_DISCONNECT,
     CONF_KEY,
     CONF_MODULES,
     CONF_NONCE,
     DEFAULT_CLASS,
+    DEFAULT_CONFIRM_WAIT,
     DEFAULT_IDLE_DISCONNECT,
     MOD_CLASS,
     MOD_INDEX,
@@ -69,6 +71,9 @@ DEVICE_WAIT_DELAY = 2.0    # seconds between attempts
 CONNECT_ATTEMPTS = 5       # connection attempts by bleak-retry-connector
 SEND_ATTEMPTS = 3          # full attempts (including reconnect) per command
 RETRY_BACKOFF = 0.4        # seconds to wait between attempts
+# After a failed subscription the cube seems to need a moment before it accepts
+# a new session. Cheap next to the eleven seconds a doomed write costs.
+SUBSCRIPTION_BACKOFF = 2.0
 
 # Below this signal strength the link becomes unreliable: the connection often
 # still succeeds, but then drops during service discovery.
@@ -363,6 +368,8 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         self._before_send: dict = {}
         self._idle_disconnect = float(entry.options.get(
             CONF_IDLE_DISCONNECT, DEFAULT_IDLE_DISCONNECT))
+        self._confirm_wait = float(entry.options.get(
+            CONF_CONFIRM_WAIT, DEFAULT_CONFIRM_WAIT))
 
         self._attr_name = module.get(MOD_NAME) or f"Cube {self._lmp}"
         suffix = f"group_{self._lmp}" if is_group else self._lmp
@@ -509,13 +516,13 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                     fresh = True
             if fresh:
                 outcome = await self._start_ack_listener(mac, client)
-                if outcome.startswith("refused") and strict:
-                    # Do not spend eleven seconds on a write this connection
-                    # will refuse too. Reconnecting is faster and has worked;
-                    # the last attempt still tries regardless, in case a device
-                    # simply has no notifications. A timeout is deliberately
-                    # not treated this way: it says the link is slow, not that
-                    # the connection is bad.
+                if outcome != "ok" and strict:
+                    # Every connection whose subscription failed also had its
+                    # write refused, eleven seconds later — five times out of
+                    # five, whether the subscription was refused outright or
+                    # timed out. Reconnecting instead took under a second.
+                    # The last attempt still writes regardless, for devices
+                    # that simply have no notifications.
                     raise RuntimeError(f"subscription {outcome}")
 
         waiter: asyncio.Future | None = None
@@ -717,15 +724,23 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                                 "%s: attempt %d/%d via %s failed: %s",
                                 self._attr_name, attempt, SEND_ATTEMPTS,
                                 mac, err)
+                            # Discarding the cache forces a full rediscovery,
+                            # which cost 45s, 32s and 29.6s in the field and
+                            # has never been shown to help. Last resort only.
                             await _drop_client(
-                                mac, clear_cache=_looks_like_stale_cache(err))
+                                mac,
+                                clear_cache=(attempt == SEND_ATTEMPTS
+                                             and _looks_like_stale_cache(err)))
                             if attempt == 1 and lmp is not None:
                                 _MAC_CACHE.pop(lmp, None)
                                 mac2 = _resolve_mac(self.hass, lmp)
                                 if mac2 and mac2 != mac:
                                     mac = mac2
                             if attempt < SEND_ATTEMPTS:
-                                await asyncio.sleep(RETRY_BACKOFF)
+                                await asyncio.sleep(
+                                    SUBSCRIPTION_BACKOFF
+                                    if "subscription" in str(err)
+                                    else RETRY_BACKOFF)
                 if relay_appeared:
                     break
             if not relay_appeared:
@@ -803,12 +818,12 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         if not self._attr_brightness:
             self._attr_brightness = 255
         self._attr_is_on = True
-        self._schedule_send(previous)
+        await self._apply(previous)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         previous = self._snapshot()
         self._attr_is_on = False
-        self._schedule_send(previous)
+        await self._apply(previous)
 
     # ------------------------------------------------------------------ Senden
 
@@ -861,20 +876,40 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         self._attr_color_temp_kelvin = snap["color_temp_kelvin"]
         self._attr_hs_color = snap["hs_color"]
 
-    def _schedule_send(self, previous: dict) -> None:
-        """Show the desired state at once and send in the background.
+    async def _apply(self, previous: dict) -> None:
+        """Send, and hold the service call briefly for the confirmation.
 
-        A cold connection takes a long time with these lamps: no proxy can
-        start one before it has caught an advertisement, and in the field that
-        took half a minute. If the service call blocked for that long the UI
-        would look as though nothing had happened — and you press again. So the
-        display switches immediately; if the cube does not acknowledge the
-        command, it is rolled back afterwards.
+        Waiting for the cube would be the honest thing to do, but a cold
+        connect occasionally takes twenty seconds, and a service call blocked
+        that long makes the UI look dead — which is what made people press
+        again. Sending optimistically is the opposite mistake: the display then
+        claims success that has not happened yet.
+
+        So: wait a few seconds. Almost every command finishes well inside that
+        (measured 0.3-4.2 s), and those show a *confirmed* state with the
+        toggle pending in between. Only the rare slow one falls back to showing
+        the desired state early, and is rolled back if it ultimately fails.
         """
+        self._schedule_send(previous)
+        if self._confirm_wait > 0 and self._send_task is not None:
+            try:
+                # shield: a timeout here means "stop waiting", never "give up
+                # sending" — the task carries on in the background.
+                await asyncio.wait_for(
+                    asyncio.shield(self._send_task), self._confirm_wait)
+            except asyncio.TimeoutError:
+                _LOGGER.debug("%s: not confirmed within %.0fs — showing the "
+                              "requested state for now", self._attr_name,
+                              self._confirm_wait)
+            except Exception:  # noqa: BLE001
+                pass          # _send_loop logs and rolls back on its own
+        self.async_write_ha_state()
+
+    def _schedule_send(self, previous: dict) -> None:
+        """Start (or re-arm) the background send for the current state."""
         if self._send_task is None or self._send_task.done():
             self._before_send = previous
         self._pending = True
-        self.async_write_ha_state()
         if self._send_task is None or self._send_task.done():
             self._send_task = self.hass.async_create_task(self._send_loop())
 

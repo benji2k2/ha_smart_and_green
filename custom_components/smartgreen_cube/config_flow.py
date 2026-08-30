@@ -27,14 +27,18 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
+    CONF_CONFIRM_WAIT,
     CONF_GROUP,
     CONF_IDLE_DISCONNECT,
     CONF_KEY,
     CONF_MODULES,
     CONF_NONCE,
+    DEFAULT_CONFIRM_WAIT,
     DEFAULT_IDLE_DISCONNECT,
     DOMAIN,
+    MAX_CONFIRM_WAIT,
     MAX_IDLE_DISCONNECT,
+    MIN_CONFIRM_WAIT,
     MIN_IDLE_DISCONNECT,
 )
 from .lap import (
@@ -174,33 +178,43 @@ class SmartGreenConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class SmartGreenOptionsFlow(OptionsFlow):
-    """How long to keep a Bluetooth connection open after a command.
+    """Two timing choices that are genuinely the user's to make.
 
-    The trade-off is latency against battery: a held connection makes the next
-    command immediate, but a connected cube has to keep its radio awake, while
-    an idle one only advertises. 0 disconnects straight after each command.
+    *Keep connection open* trades latency against battery: a held connection
+    makes the next command immediate, but a connected cube keeps its radio
+    awake while an idle one only advertises. 0 disconnects straight away.
+
+    *Wait for confirmation* trades responsiveness against honesty. Waiting
+    means the state shown is one the cube confirmed; not waiting means it
+    appears instantly but may be wrong. Most commands confirm within a few
+    seconds, so a short wait covers nearly all of them. 0 never waits.
     """
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None
                               ) -> ConfigFlowResult:
         if user_input is not None:
-            return self.async_create_entry(
-                data={CONF_IDLE_DISCONNECT: int(user_input[CONF_IDLE_DISCONNECT])}
-            )
+            return self.async_create_entry(data={
+                CONF_IDLE_DISCONNECT: int(user_input[CONF_IDLE_DISCONNECT]),
+                CONF_CONFIRM_WAIT: int(user_input[CONF_CONFIRM_WAIT]),
+            })
 
-        current = self.config_entry.options.get(
-            CONF_IDLE_DISCONNECT, DEFAULT_IDLE_DISCONNECT)
+        options = self.config_entry.options
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
-                vol.Required(CONF_IDLE_DISCONNECT, default=current): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_IDLE_DISCONNECT,
-                        max=MAX_IDLE_DISCONNECT,
-                        step=10,
-                        unit_of_measurement="s",
-                        mode=NumberSelectorMode.BOX,
-                    )
-                ),
+                vol.Required(
+                    CONF_IDLE_DISCONNECT,
+                    default=options.get(CONF_IDLE_DISCONNECT,
+                                        DEFAULT_IDLE_DISCONNECT),
+                ): NumberSelector(NumberSelectorConfig(
+                    min=MIN_IDLE_DISCONNECT, max=MAX_IDLE_DISCONNECT, step=10,
+                    unit_of_measurement="s", mode=NumberSelectorMode.BOX)),
+                vol.Required(
+                    CONF_CONFIRM_WAIT,
+                    default=options.get(CONF_CONFIRM_WAIT,
+                                        DEFAULT_CONFIRM_WAIT),
+                ): NumberSelector(NumberSelectorConfig(
+                    min=MIN_CONFIRM_WAIT, max=MAX_CONFIRM_WAIT, step=1,
+                    unit_of_measurement="s", mode=NumberSelectorMode.BOX)),
             }),
         )

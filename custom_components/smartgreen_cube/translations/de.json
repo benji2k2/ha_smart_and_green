@@ -63,10 +63,11 @@
   "options": {
     "step": {
       "init": {
-        "title": "Verbindung",
-        "description": "Wie lange die Bluetooth-Verbindung nach einem Befehl offen bleibt. Länger heißt: Der nächste Befehl wirkt sofort. Kürzer heißt: Der Funk des Cubes schläft früher wieder. 0 trennt direkt nach jedem Befehl.",
+        "title": "Zeitverhalten",
+        "description": "Wie lange die Bluetooth-Verbindung nach einem Befehl offen bleibt — länger heißt, der nächste Befehl wirkt sofort; kürzer heißt, der Funk des Cubes schläft früher (0 trennt sofort). Und wie lange auf die Bestätigung des Cubes gewartet wird, bevor der neue Zustand angezeigt wird — Warten zeigt nur bestätigte Zustände, dafür bleibt der Schalter kurz beschäftigt (0 wartet nie).",
         "data": {
-          "idle_disconnect": "Verbindung offen halten"
+          "idle_disconnect": "Verbindung offen halten",
+          "confirm_wait": "Auf Bestätigung warten"
         }
       }
     }

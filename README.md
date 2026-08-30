@@ -86,9 +86,11 @@ Two things make that slow, and both are addressed:
 
 What the integration does so it does not get in the way:
 
-- The display switches **immediately** and the command goes out in the
-  background — no need to press twice. If the cube does not acknowledge it, the
-  display is rolled back afterwards.
+- The service call **waits a few seconds for the cube to confirm**, so the
+  state you see is one the device acknowledged, with the toggle showing as busy
+  meanwhile. Commands almost always confirm well inside that window. Only the
+  rare slow one falls back to showing the requested state early, and is rolled
+  back if it ultimately fails. Adjustable under *Configure* (0 never waits).
 - The connection stays open for **two minutes** by default, so follow-up
   commands do not pay for a new connection. Adjustable under *Configure* on the
   integration: longer means the next command is immediate, shorter lets the

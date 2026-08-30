@@ -63,10 +63,11 @@
   "options": {
     "step": {
       "init": {
-        "title": "Connection",
-        "description": "How long to keep the Bluetooth connection open after a command. Longer means the next command is immediate; shorter lets the cube's radio sleep sooner. 0 disconnects right after each command.",
+        "title": "Timing",
+        "description": "How long to keep the Bluetooth connection open after a command — longer means the next command is immediate, shorter lets the cube's radio sleep sooner (0 disconnects at once). And how long to wait for the cube to confirm before showing the new state — waiting shows only confirmed states, at the cost of the toggle staying busy a moment (0 never waits).",
         "data": {
-          "idle_disconnect": "Keep connection open"
+          "idle_disconnect": "Keep connection open",
+          "confirm_wait": "Wait for confirmation"
         }
       }
     }

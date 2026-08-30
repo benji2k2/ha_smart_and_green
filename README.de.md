@@ -87,9 +87,12 @@ Zwei Dinge machen ihn langsam, beide sind adressiert:
 
 Was die Integration tut, damit es nicht stört:
 
-- Die Anzeige schaltet **sofort** um, gesendet wird im Hintergrund — man muss
-  nicht mehrfach drücken. Bestätigt der Cube den Befehl nicht, wird die Anzeige
-  nachträglich zurückgesetzt.
+- Der Dienstaufruf **wartet einige Sekunden auf die Bestätigung des Cubes**, so
+  dass der angezeigte Zustand einer ist, den das Gerät quittiert hat; der
+  Schalter erscheint solange als beschäftigt. Fast alle Befehle bestätigen weit
+  innerhalb dieser Spanne. Nur der seltene langsame Fall zeigt vorab den
+  gewünschten Zustand und wird zurückgesetzt, falls er endgültig scheitert.
+  Einstellbar unter *Konfigurieren* (0 wartet nie).
 - Die Verbindung bleibt standardmäßig **zwei Minuten** offen, damit
   Folgebefehle keinen neuen Verbindungsaufbau bezahlen. Einstellbar über
   *Konfigurieren* an der Integration: länger heißt, der nächste Befehl wirkt

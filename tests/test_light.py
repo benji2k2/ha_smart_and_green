@@ -49,6 +49,7 @@ class Light(light.SmartGreenCubeLight):
         self._pending = False
         self._before_send = {}
         self._idle_disconnect = 120.0
+        self._confirm_wait = 0.0
         self._attr_name = "TestCube"
         self._attr_is_on = False
         self._attr_brightness = 255
@@ -229,26 +230,70 @@ async def test_a_busy_connection_is_never_taken_away():
 
 # --------------------------------------------------------------- background send
 
-async def test_display_switches_before_the_radio_does():
-    """The UI must react at once, or people press again."""
+async def test_a_quick_command_is_confirmed_before_the_state_is_shown():
+    """Most commands finish in seconds, so wait and show the real outcome."""
     reset_module_state()
     entity = Light()
+    entity._confirm_wait = 5.0
     sends = []
 
-    async def slow_send():
-        await asyncio.sleep(0.05)
+    async def quick_send():
+        await asyncio.sleep(0.02)
         sends.append(1)
+
+    entity._send = quick_send
+    previous = entity._snapshot()
+    entity._attr_is_on = True
+    await entity._apply(previous)
+
+    assert sends == [1], "the send must have completed before returning"
+    assert entity._attr_is_on is True
+    assert entity.state_writes == 1
+
+
+async def test_a_slow_command_stops_blocking_and_shows_the_wish():
+    """A cold connect can take twenty seconds; the UI must not look dead."""
+    reset_module_state()
+    entity = Light()
+    entity._confirm_wait = 0.05
+    finished = []
+
+    async def slow_send():
+        await asyncio.sleep(0.3)
+        finished.append(1)
 
     entity._send = slow_send
     previous = entity._snapshot()
     entity._attr_is_on = True
-    entity._schedule_send(previous)
 
-    assert entity._attr_is_on is True
-    assert entity.state_writes == 1, "state written before sending"
-    assert sends == [], "sending has not finished yet"
+    started = asyncio.get_event_loop().time()
+    await entity._apply(previous)
+    elapsed = asyncio.get_event_loop().time() - started
+
+    assert elapsed < 0.25, f"blocked for {elapsed:.2f}s despite the limit"
+    assert entity._attr_is_on is True, "show the requested state meanwhile"
+    assert finished == [], "the send is still running"
     await entity._send_task
-    assert sends == [1]
+    assert finished == [1], "and it must not have been cancelled"
+
+
+async def test_confirm_wait_of_zero_is_fully_optimistic():
+    """0 restores the old behaviour: show at once, never block."""
+    reset_module_state()
+    entity = Light()
+    entity._confirm_wait = 0.0
+
+    async def slow_send():
+        await asyncio.sleep(0.3)
+
+    entity._send = slow_send
+    previous = entity._snapshot()
+    entity._attr_is_on = True
+    started = asyncio.get_event_loop().time()
+    await entity._apply(previous)
+    assert asyncio.get_event_loop().time() - started < 0.1
+    assert entity.state_writes == 1
+    await entity._send_task
 
 
 async def test_rapid_changes_are_coalesced():
@@ -732,13 +777,14 @@ async def test_subscription_result_is_reported():
         light.NOTIFY_TIMEOUT = 5.0
 
 
-async def test_a_slow_subscription_does_not_cost_the_connection():
-    """Regression: a timeout discarded a good link and its cache.
+async def test_a_slow_subscription_also_abandons_the_connection():
+    """A timeout predicts a failing write just as a refusal does.
 
-    Field log: connect 1.1s, subscription timed out, cache discarded — and the
-    next two connections then took 45s and 32s, because without the cache the
-    whole attribute table has to be rediscovered. The command went from five
-    seconds to eighty-five. A timeout means the link is slow, not broken.
+    v0.9.4 assumed otherwise and sent anyway; the field log then showed two
+    timeouts followed by two writes failing after eleven seconds each. The
+    tally is 5:5 — subscription failure predicts write failure, whatever its
+    kind. What must *not* happen is discarding the GATT cache over it: that
+    forces a rediscovery costing 30-45s.
     """
     reset_module_state()
     light.NOTIFY_TIMEOUT = 0.05
@@ -759,9 +805,11 @@ async def test_a_slow_subscription_does_not_cost_the_connection():
     try:
         await entity._write_once(MAC, frame, cmd_id, expect_ack=False,
                                  strict=True)
-        assert cube.writes, "the frame must still be sent, just unverified"
-        assert MAC in light._CLIENTS, "the connection must be kept"
-        assert light._ACK_ACTIVE.get(MAC) is False
+    except RuntimeError as err:
+        assert "timeout" in str(err), err
+        assert cube.writes == [], "must not write to a connection that stalled"
+    else:
+        raise AssertionError("a stalled subscription must abandon the link")
     finally:
         light.NOTIFY_TIMEOUT = 5.0
 
@@ -808,8 +856,9 @@ async def test_an_unverifiable_command_is_repeated_too():
     """A single cube whose subscription failed had no safety net at all.
 
     The repeat used to be tied to group broadcasts. But a command that cannot
-    be confirmed is equally exposed however it got that way — and a failed
-    subscription means the link is already struggling.
+    be confirmed is equally exposed however it got that way — and on the final
+    attempt we send even without a subscription, so that path needs the repeat
+    most of all.
     """
     reset_module_state()
     light.UNVERIFIED_REPEAT_GAP = 0.01
@@ -829,8 +878,9 @@ async def test_an_unverifiable_command_is_repeated_too():
     entity._connect = connect
     frame, cmd_id = entity._build_frame()
     try:
+        # strict=False is the final attempt, the one that sends regardless.
         await entity._write_once(MAC, frame, cmd_id, expect_ack=True,
-                                 strict=True)
+                                 strict=False)
         # One write, one fresh-connection repeat, then the unverified repeats.
         assert len(cube.writes) >= light.UNVERIFIED_REPEATS, \
             f"only {len(cube.writes)} writes for an unverifiable command"
