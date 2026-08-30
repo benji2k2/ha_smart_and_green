@@ -63,11 +63,21 @@ Two things make that slow, and both are addressed:
   floor a link needs more retries and drops more often, so a proxy closer to
   the cube helps.
 
-  Measurement put this in perspective. Through triple glazing at −89 to
-  −92 dBm, three cold runs took **2.1 s, 2.9 s and 3.9 s** from command to
-  frame sent, each on the first attempt. Weak signal was never what made
-  switching slow here; a series of software faults was, and the worst case came
-  down from 142 s to under 4 s without the radio path changing at all.
+  Measurement separated the two causes. A series of software faults produced
+  the extremes, and fixing them brought the worst case from **142 s to under
+  4 s without the radio path changing at all**. What remains is a genuine
+  weak-link effect: cold connects measured through triple glazing at −88 to
+  −95 dBm came out as
+
+  ```
+  0.3  0.4  1.1  1.2  1.2  1.8  2.0  2.5  2.6  4.2  …  19.2 s
+  ```
+
+  — usually seconds, occasionally a long tail. That shape is inherent to how
+  BLE connects (see above): each attempt either lands or costs another round,
+  so a marginal link is fast most of the time and slow now and then. Only a
+  closer proxy shortens that tail. Raising the connection hold time under
+  *Configure* makes you pay for it less often, at the cost of cube battery.
 
   Be careful reading RSSI here: it is measured on advertisements that *arrived*.
   Through an obstacle the weak ones are lost and only the lucky ones are
@@ -121,8 +131,14 @@ really radio range. Five metres through a solid wall is, in practice, **not**
 enough.
 
 The **signal strength** sensor shows the current value, and below −75 dBm the
-integration warns in the log. The remedy is always a Bluetooth proxy closer to
-the cube — Home Assistant automatically picks the one with the best reception.
+integration warns in the log (at most once every 15 minutes per device). The
+remedy is a Bluetooth proxy closer to the cube — Home Assistant automatically
+picks the one with the best reception.
+
+Read that number with care: RSSI is measured on advertisements that *arrived*.
+Through an obstacle the weak ones are lost and only the lucky ones get
+measured, so a bad link can report much the same value as a good one. The
+connection times in the log are the better measure of what you actually have.
 
 ## What it cannot do
 

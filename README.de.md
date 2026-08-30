@@ -63,12 +63,21 @@ Zwei Dinge machen ihn langsam, beide sind adressiert:
   Rauschpegel braucht eine Verbindung mehr Wiederholungen und bricht öfter ab,
   ein näherer Proxy hilft also.
 
-  Messungen relativieren das: Durch Dreifachverglasung bei −89 bis −92 dBm
-  brauchten drei kalte Durchläufe **2,1 s, 2,9 s und 3,9 s** vom Befehl bis zum
-  gesendeten Frame, jeweils im ersten Versuch. Das schwache Signal war hier nie
-  die Ursache für träges Schalten — eine Reihe von Softwarefehlern war es, und
-  der schlechteste Fall sank von 142 s auf unter 4 s, ohne dass sich am
-  Funkweg etwas geändert hätte.
+  Messungen trennen die beiden Ursachen. Eine Reihe von Softwarefehlern
+  verursachte die Extremwerte; ihre Behebung senkte den schlechtesten Fall von
+  **142 s auf unter 4 s, ohne jede Änderung am Funkweg**. Was bleibt, ist ein
+  echter Grenzlink-Effekt: Kalte Verbindungsaufbauten durch Dreifachverglasung
+  bei −88 bis −95 dBm ergaben
+
+  ```
+  0,3  0,4  1,1  1,2  1,2  1,8  2,0  2,5  2,6  4,2  …  19,2 s
+  ```
+
+  — meist Sekunden, gelegentlich ein langer Ausläufer. Diese Form folgt
+  unmittelbar aus dem Verbindungsverfahren (siehe oben): Jeder Versuch trifft
+  oder kostet eine weitere Runde. Nur ein näherer Proxy verkürzt den Ausläufer.
+  Eine höhere Haltezeit unter *Konfigurieren* lässt dich seltener dafür zahlen
+  — zu Lasten des Cube-Akkus.
 
   Beim Lesen der Signalstärke Vorsicht: Sie wird an *angekommenen*
   Advertisements gemessen. Durch ein Hindernis gehen die schwachen verloren und
@@ -126,8 +135,15 @@ ist aber schlicht Funkreichweite. Fünf Meter durch eine massive Wand reichen
 erfahrungsgemäß **nicht**.
 
 Der Sensor **Signalstärke** zeigt den aktuellen Wert, und unter −75 dBm warnt
-die Integration im Protokoll. Abhilfe ist immer ein Bluetooth-Proxy näher am
-Cube — Home Assistant wählt automatisch den mit dem besten Empfang.
+die Integration im Protokoll (höchstens alle 15 Minuten je Gerät). Abhilfe ist
+ein Bluetooth-Proxy näher am Cube — Home Assistant wählt automatisch den mit
+dem besten Empfang.
+
+Diesen Wert bitte vorsichtig lesen: Der RSSI wird an *angekommenen*
+Advertisements gemessen. Durch ein Hindernis gehen die schwachen verloren und
+nur die zufällig starken werden gemessen — ein schlechter Link kann daher fast
+denselben Wert melden wie ein guter. Die Verbindungszeiten im Protokoll sind
+das aussagekräftigere Maß.
 
 ### Was es (noch) nicht gibt
 
