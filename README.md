@@ -61,9 +61,17 @@ Two things make that slow, and both are addressed:
   finds another cube's link already open relays through it instead.
 - **Weak signal.** Attempts were logged at −87 and −96 dBm. Near the noise
   floor a link needs more retries and drops more often, so a proxy closer to
-  the cube still helps. It is not the whole story though: after the fix above,
-  a connection at −89 dBm came up in **0.9 s**, where the same signal had
-  previously taken over two minutes.
+  the cube helps.
+
+  How much of the delay was signal and how much was contention is not settled.
+  The fast run afterwards happened at −89 dBm, which looks like an answer, but
+  a balcony door had been opened in between — the radio path changed along with
+  the code, so the two cannot be separated.
+
+  Be careful reading RSSI here: it is measured on advertisements that *arrived*.
+  Through an obstacle the weak ones are lost and only the lucky ones are
+  measured, so a bad link can report much the same number as a good one. Treat
+  it as a floor on quality, not a measure of it.
 
 What the integration does so it does not get in the way:
 

@@ -61,9 +61,19 @@ Zwei Dinge machen ihn langsam, beide sind adressiert:
   offen vorfindet, läuft darüber.
 - **Schwaches Signal.** Die Versuche liefen bei −87 und −96 dBm. Nahe dem
   Rauschpegel braucht eine Verbindung mehr Wiederholungen und bricht öfter ab,
-  ein näherer Proxy hilft also weiterhin. Es ist aber nicht die ganze
-  Geschichte: Nach der obigen Korrektur stand eine Verbindung bei −89 dBm in
-  **0,9 s** — bei demselben Signal, das vorher über zwei Minuten brauchte.
+  ein näherer Proxy hilft also.
+
+  Wie viel der Verzögerung auf das Signal und wie viel auf die Slot-Konkurrenz
+  entfiel, ist **nicht geklärt**. Der schnelle Durchlauf danach fand bei −89 dBm
+  statt, was nach einer Antwort aussieht — zwischenzeitlich wurde aber eine
+  Balkontür geöffnet. Der Funkweg hat sich also zusammen mit dem Code geändert,
+  beides lässt sich nicht trennen.
+
+  Beim Lesen der Signalstärke Vorsicht: Sie wird an *angekommenen*
+  Advertisements gemessen. Durch ein Hindernis gehen die schwachen verloren und
+  nur die zufällig starken werden gemessen — ein schlechter Link kann daher
+  fast denselben Wert melden wie ein guter. Der Wert ist eine Untergrenze der
+  Qualität, kein Maß dafür.
 
 Was die Integration tut, damit es nicht stört:
 
