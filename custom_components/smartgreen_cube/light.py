@@ -243,6 +243,11 @@ async def _drop_client(mac: str, clear_cache: bool = False) -> None:
     signature of a stale service cache: the proxy remembers handles that no
     longer match, so writes fail in confusing ways. Reconnecting alone does not
     help — the cache has to go too.
+
+    Do this sparingly. Without the cache the next connection has to rediscover
+    the whole attribute table, which over a weak link took 45s and then 32s in
+    the field, where cached connections took one second. Clearing on a mere
+    timeout turned a five-second problem into an eighty-five-second one.
     """
     _forget_connection(mac)
     client = _CLIENTS.pop(mac, None)
@@ -264,7 +269,7 @@ async def _drop_client(mac: str, clear_cache: bool = False) -> None:
 #: 133 is the ESP32's generic GATT failure, which shows up in exactly this case.
 _STALE_CACHE_HINTS = (
     "not found", "authorization", "invalid handle", "attribute",
-    "gatt error", "error=133", "subscription failed",
+    "gatt error", "error=133",
 )
 
 
@@ -500,14 +505,15 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                     client = await self._connect(mac, ble_device, waited)
                     fresh = True
             if fresh:
-                subscribed = await self._start_ack_listener(mac, client)
-                if not subscribed and strict:
+                outcome = await self._start_ack_listener(mac, client)
+                if outcome.startswith("refused") and strict:
                     # Do not spend eleven seconds on a write this connection
-                    # will refuse. Reconnecting is both faster and usually
-                    # enough; the last attempt still tries regardless, in case
-                    # a device simply has no notifications.
-                    raise RuntimeError(
-                        "subscription failed — connection unusable")
+                    # will refuse too. Reconnecting is faster and has worked;
+                    # the last attempt still tries regardless, in case a device
+                    # simply has no notifications. A timeout is deliberately
+                    # not treated this way: it says the link is slow, not that
+                    # the connection is bad.
+                    raise RuntimeError(f"subscription {outcome}")
 
         waiter: asyncio.Future | None = None
 
@@ -571,15 +577,19 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
 
         _schedule_idle_disconnect(mac, self._idle_disconnect)
 
-    async def _start_ack_listener(self, mac: str, client: Any) -> bool:
+    async def _start_ack_listener(self, mac: str, client: Any) -> str:
         """Subscribe to the notify characteristic to receive acknowledgements.
 
-        Returns whether the subscription succeeded. It matters beyond the
-        acknowledgement itself: in the field, every connection where this
-        failed also rejected the following write with "Insufficient
-        authorization", after burning eleven seconds on it. A failed
-        subscription is therefore a usable early warning that the connection
-        is no good.
+        Returns ``"ok"``, ``"timeout"``, or ``"refused: ..."``. The distinction
+        matters and conflating the two was expensive:
+
+        A *refusal* means the device rejected the operation, and in the field
+        every connection that was refused here also refused the following
+        write, after burning eleven seconds on it. Worth abandoning early.
+
+        A *timeout* only means the link is slow. The connection is very likely
+        fine, so we send without being able to confirm, rather than throwing
+        away a link that took a second to build.
         """
         key, nonce = self._key, self._nonce
 
@@ -597,15 +607,16 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                 client.start_notify(CHAR_UUID, _on_notify), NOTIFY_TIMEOUT)
         except asyncio.TimeoutError:
             _ACK_ACTIVE[mac] = False
-            _LOGGER.debug("%s: subscription timed out after %.0fs",
+            _LOGGER.debug("%s: subscription timed out after %.0fs — sending "
+                          "unverified rather than reconnecting",
                           self._attr_name, NOTIFY_TIMEOUT)
-            return False
+            return "timeout"
         except Exception as err:  # noqa: BLE001
             _ACK_ACTIVE[mac] = False
             _LOGGER.debug("%s: subscription refused (%s)", self._attr_name, err)
-            return False
+            return f"refused: {err}"
         _ACK_ACTIVE[mac] = True
-        return True
+        return "ok"
 
     def _log_link_quality(self, mac: str) -> None:
         """Log the signal strength and warn about a weak link.

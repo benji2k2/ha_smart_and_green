@@ -616,9 +616,10 @@ async def test_slow_notify_does_not_hold_up_the_command():
     entity = Light()
     started = asyncio.get_event_loop().time()
     try:
-        await entity._start_ack_listener(MAC, cube)
+        outcome = await entity._start_ack_listener(MAC, cube)
         elapsed = asyncio.get_event_loop().time() - started
         assert elapsed < 1.0, f"subscription blocked for {elapsed:.1f}s"
+        assert outcome == "timeout"
         assert light._ACK_ACTIVE.get(MAC) is False
     finally:
         light.NOTIFY_TIMEOUT = 5.0
@@ -689,7 +690,7 @@ async def test_a_connection_whose_subscription_failed_is_not_written_to():
         await entity._write_once(MAC, frame, cmd_id, expect_ack=False,
                                  strict=True)
     except RuntimeError as err:
-        assert "unusable" in str(err), err
+        assert "refused" in str(err), err
         assert light._looks_like_stale_cache(err), \
             "must trigger a cache clear on reconnect"
     else:
@@ -704,12 +705,96 @@ async def test_a_connection_whose_subscription_failed_is_not_written_to():
 
 
 async def test_subscription_result_is_reported():
+    """Three outcomes, because the caller reacts differently to each."""
     reset_module_state()
     entity = Light()
+
     good = FakeCube(KEYSTREAM)
-    assert await entity._start_ack_listener(MAC, good) is True
+    assert await entity._start_ack_listener(MAC, good) == "ok"
     assert light._ACK_ACTIVE[MAC] is True
 
     bad = FakeCube(KEYSTREAM, notify_error=RuntimeError("nope"))
-    assert await entity._start_ack_listener(OTHER_MAC, bad) is False
+    assert (await entity._start_ack_listener(OTHER_MAC, bad)).startswith("refused")
     assert light._ACK_ACTIVE[OTHER_MAC] is False
+
+    class Slow(FakeCube):
+        async def start_notify(self, uuid, callback):
+            await asyncio.sleep(5)
+
+    light.NOTIFY_TIMEOUT = 0.05
+    try:
+        assert await entity._start_ack_listener("CC", Slow(KEYSTREAM)) == "timeout"
+    finally:
+        light.NOTIFY_TIMEOUT = 5.0
+
+
+async def test_a_slow_subscription_does_not_cost_the_connection():
+    """Regression: a timeout discarded a good link and its cache.
+
+    Field log: connect 1.1s, subscription timed out, cache discarded — and the
+    next two connections then took 45s and 32s, because without the cache the
+    whole attribute table has to be rediscovered. The command went from five
+    seconds to eighty-five. A timeout means the link is slow, not broken.
+    """
+    reset_module_state()
+    light.NOTIFY_TIMEOUT = 0.05
+
+    class Slow(FakeCube):
+        async def start_notify(self, uuid, callback):
+            await asyncio.sleep(5)
+
+    cube = Slow(KEYSTREAM)
+
+    async def connect(mac, device, waited):
+        light._CLIENTS[mac] = cube
+        return cube
+
+    entity = Light()
+    entity._connect = connect
+    frame, cmd_id = entity._build_frame()
+    try:
+        await entity._write_once(MAC, frame, cmd_id, expect_ack=False,
+                                 strict=True)
+        assert cube.writes, "the frame must still be sent, just unverified"
+        assert MAC in light._CLIENTS, "the connection must be kept"
+        assert light._ACK_ACTIVE.get(MAC) is False
+    finally:
+        light.NOTIFY_TIMEOUT = 5.0
+
+
+async def test_a_refusal_still_abandons_the_connection():
+    """The 3:3 correlation was with refusals, and that reasoning still holds."""
+    reset_module_state()
+
+    class Refuses(FakeCube):
+        async def start_notify(self, uuid, callback):
+            raise RuntimeError("Insufficient authorization (8)")
+
+    cube = Refuses(KEYSTREAM)
+
+    async def connect(mac, device, waited):
+        light._CLIENTS[mac] = cube
+        return cube
+
+    entity = Light()
+    entity._connect = connect
+    frame, cmd_id = entity._build_frame()
+    try:
+        await entity._write_once(MAC, frame, cmd_id, expect_ack=False,
+                                 strict=True)
+    except RuntimeError as err:
+        assert "refused" in str(err), err
+        assert light._looks_like_stale_cache(err), \
+            "the device's own wording decides whether the cache goes"
+    else:
+        raise AssertionError("a refusal must abandon the connection")
+    assert cube.writes == []
+
+
+async def test_a_timeout_never_discards_the_gatt_cache():
+    """Rediscovery is expensive; only wrong handles justify it."""
+    assert not light._looks_like_stale_cache(
+        RuntimeError("subscription timed out after 5s"))
+    assert not light._looks_like_stale_cache(asyncio.TimeoutError())
+    assert light._looks_like_stale_cache(
+        RuntimeError("subscription refused: Insufficient authorization (8)"))
