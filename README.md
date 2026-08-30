@@ -60,8 +60,10 @@ Two things make that slow, and both are addressed:
   was evicted. Connections are now built one at a time, and a command that
   finds another cube's link already open relays through it instead.
 - **Weak signal.** Attempts were logged at −87 and −96 dBm. Near the noise
-  floor the link layer needs many retries or fails outright. No amount of
-  software fixes that; the proxy has to be closer.
+  floor a link needs more retries and drops more often, so a proxy closer to
+  the cube still helps. It is not the whole story though: after the fix above,
+  a connection at −89 dBm came up in **0.9 s**, where the same signal had
+  previously taken over two minutes.
 
 What the integration does so it does not get in the way:
 

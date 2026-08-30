@@ -73,6 +73,9 @@ RETRY_BACKOFF = 0.4        # seconds to wait between attempts
 # Below this signal strength the link becomes unreliable: the connection often
 # still succeeds, but then drops during service discovery.
 WEAK_RSSI = -75
+# Do not repeat the weak-signal warning on every single command.
+WEAK_RSSI_REPEAT = 900.0  # seconds
+_WEAK_WARNED: dict[str, float] = {}
 
 # How long we wait for the cube's acknowledgement. On the device it always
 # arrived within milliseconds; generous here for weak connections.
@@ -562,14 +565,24 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         info = bluetooth.async_last_service_info(self.hass, mac, connectable=True)
         if info is None:
             return
-        if info.rssi <= WEAK_RSSI:
-            _LOGGER.warning(
-                "%s: weak signal (%d dBm via %s). Below %d dBm connections "
-                "drop frequently — move a Bluetooth proxy closer.",
-                self._attr_name, info.rssi, info.source, WEAK_RSSI)
-        else:
-            _LOGGER.debug("%s: signal %d dBm via %s",
-                          self._attr_name, info.rssi, info.source)
+        _LOGGER.debug("%s: signal %d dBm via %s",
+                      self._attr_name, info.rssi, info.source)
+        if info.rssi > WEAK_RSSI:
+            _WEAK_WARNED.pop(mac, None)
+            return
+
+        # The signal itself is worth warning about, but not once per command:
+        # a burst of commands produced a wall of identical warnings in the
+        # field, and a weak link still connected in under a second.
+        now = monotonic()
+        last = _WEAK_WARNED.get(mac)
+        if last is not None and now - last < WEAK_RSSI_REPEAT:
+            return
+        _WEAK_WARNED[mac] = now
+        _LOGGER.warning(
+            "%s: weak signal (%d dBm via %s). Below %d dBm connections take "
+            "longer and drop more often — a Bluetooth proxy closer to the cube "
+            "helps.", self._attr_name, info.rssi, info.source, WEAK_RSSI)
 
     def _routes(self) -> list[tuple[str, str | None]]:
         """Connections to try, best first, as (mac, lmp_for_cache_reset).

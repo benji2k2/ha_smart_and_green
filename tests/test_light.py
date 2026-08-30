@@ -560,3 +560,38 @@ async def test_connect_has_a_time_limit():
     finally:
         light.establish_connection = original
         light.CONNECT_TIMEOUT = 45.0
+
+
+async def test_weak_signal_is_not_warned_about_on_every_command():
+    """A burst of commands produced a wall of identical warnings in the field."""
+    reset_module_state()
+    light._WEAK_WARNED.clear()
+
+    warnings = []
+    original = light._LOGGER.warning
+    light._LOGGER.warning = lambda *a, **k: warnings.append(a)
+
+    class Info:
+        rssi = -89
+        source = "proxy"
+
+    entity = Light()
+    entity.hass = FakeHass()
+    bluetooth = sg.light.bluetooth
+    original_info = bluetooth.async_last_service_info
+    bluetooth.async_last_service_info = lambda *a, **k: Info()
+    try:
+        for _ in range(5):
+            entity._log_link_quality(MAC)
+        assert len(warnings) == 1, f"{len(warnings)} warnings for one weak link"
+
+        # A recovered link re-arms the warning.
+        Info.rssi = -60
+        entity._log_link_quality(MAC)
+        Info.rssi = -89
+        entity._log_link_quality(MAC)
+        assert len(warnings) == 2, "should warn again after the link recovered"
+    finally:
+        light._LOGGER.warning = original
+        bluetooth.async_last_service_info = original_info
+        light._WEAK_WARNED.clear()

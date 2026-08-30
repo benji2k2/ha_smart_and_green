@@ -60,8 +60,10 @@ Zwei Dinge machen ihn langsam, beide sind adressiert:
   nacheinander aufgebaut, und ein Befehl, der die Verbindung des anderen Cubes
   offen vorfindet, läuft darüber.
 - **Schwaches Signal.** Die Versuche liefen bei −87 und −96 dBm. Nahe dem
-  Rauschpegel braucht die Verbindungsschicht viele Wiederholungen oder scheitert
-  ganz. Das lässt sich nicht in Software beheben; der Proxy muss näher.
+  Rauschpegel braucht eine Verbindung mehr Wiederholungen und bricht öfter ab,
+  ein näherer Proxy hilft also weiterhin. Es ist aber nicht die ganze
+  Geschichte: Nach der obigen Korrektur stand eine Verbindung bei −89 dBm in
+  **0,9 s** — bei demselben Signal, das vorher über zwei Minuten brauchte.
 
 Was die Integration tut, damit es nicht stört:
 
