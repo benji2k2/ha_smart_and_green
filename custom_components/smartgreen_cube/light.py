@@ -264,7 +264,7 @@ async def _drop_client(mac: str, clear_cache: bool = False) -> None:
 #: 133 is the ESP32's generic GATT failure, which shows up in exactly this case.
 _STALE_CACHE_HINTS = (
     "not found", "authorization", "invalid handle", "attribute",
-    "gatt error", "error=133",
+    "gatt error", "error=133", "subscription failed",
 )
 
 
@@ -463,10 +463,12 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         return client
 
     async def _write_once(self, mac: str, frame: bytes, cmd_id: int,
-                          expect_ack: bool) -> None:
+                          expect_ack: bool, strict: bool = True) -> None:
         """Write a frame and wait for the cube to acknowledge it.
 
-        Keeps the connection open for follow-up commands.
+        Keeps the connection open for follow-up commands. With ``strict`` a
+        connection whose notify subscription failed is discarded straight away
+        instead of being written to — see :meth:`_start_ack_listener`.
         """
         client = _CLIENTS.get(mac)
         fresh = False
@@ -498,7 +500,14 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                     client = await self._connect(mac, ble_device, waited)
                     fresh = True
             if fresh:
-                await self._start_ack_listener(mac, client)
+                subscribed = await self._start_ack_listener(mac, client)
+                if not subscribed and strict:
+                    # Do not spend eleven seconds on a write this connection
+                    # will refuse. Reconnecting is both faster and usually
+                    # enough; the last attempt still tries regardless, in case
+                    # a device simply has no notifications.
+                    raise RuntimeError(
+                        "subscription failed — connection unusable")
 
         waiter: asyncio.Future | None = None
 
@@ -514,7 +523,7 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         acked = char is not None and "write" in getattr(char, "properties", ())
         target = char if char is not None else CHAR_UUID
         if fresh:
-            _LOGGER.debug("%s: write mode %s", self._attr_name,
+            _LOGGER.debug("%s: using %s GATT writes", self._attr_name,
                           "acknowledged" if acked else "unacknowledged")
 
         try:
@@ -562,11 +571,15 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
 
         _schedule_idle_disconnect(mac, self._idle_disconnect)
 
-    async def _start_ack_listener(self, mac: str, client: Any) -> None:
+    async def _start_ack_listener(self, mac: str, client: Any) -> bool:
         """Subscribe to the notify characteristic to receive acknowledgements.
 
-        If that fails everything carries on as before: we simply do not wait
-        for confirmation, rather than failing the command.
+        Returns whether the subscription succeeded. It matters beyond the
+        acknowledgement itself: in the field, every connection where this
+        failed also rejected the following write with "Insufficient
+        authorization", after burning eleven seconds on it. A failed
+        subscription is therefore a usable early warning that the connection
+        is no good.
         """
         key, nonce = self._key, self._nonce
 
@@ -582,11 +595,17 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         try:
             await asyncio.wait_for(
                 client.start_notify(CHAR_UUID, _on_notify), NOTIFY_TIMEOUT)
-            _ACK_ACTIVE[mac] = True
-        except (Exception, asyncio.TimeoutError) as err:  # noqa: BLE001
+        except asyncio.TimeoutError:
             _ACK_ACTIVE[mac] = False
-            _LOGGER.debug("%s: acknowledgements unavailable (%s)",
-                          self._attr_name, err)
+            _LOGGER.debug("%s: subscription timed out after %.0fs",
+                          self._attr_name, NOTIFY_TIMEOUT)
+            return False
+        except Exception as err:  # noqa: BLE001
+            _ACK_ACTIVE[mac] = False
+            _LOGGER.debug("%s: subscription refused (%s)", self._attr_name, err)
+            return False
+        _ACK_ACTIVE[mac] = True
+        return True
 
     def _log_link_quality(self, mac: str) -> None:
         """Log the signal strength and warn about a weak link.
@@ -669,7 +688,8 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                             started = monotonic()
                             await self._write_once(
                                 mac, frame, cmd_id,
-                                expect_ack=not self._is_group)
+                                expect_ack=not self._is_group,
+                                strict=attempt < SEND_ATTEMPTS)
                             _LOGGER.debug("%s: frame sent (attempt %d, %s) "
                                           "in %.1fs", self._attr_name, attempt,
                                           mac, monotonic() - started)

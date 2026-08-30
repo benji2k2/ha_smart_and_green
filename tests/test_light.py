@@ -660,3 +660,56 @@ async def test_cache_is_cleared_only_when_it_looks_stale():
     await light._drop_client(MAC, clear_cache=False)
     assert not ordinary.cleared, "a healthy cache must be kept"
     assert ordinary.disconnected
+
+
+async def test_a_connection_whose_subscription_failed_is_not_written_to():
+    """Field data: notify failing predicted the write failing, three for three.
+
+    Those writes took eleven seconds each to be refused with "Insufficient
+    authorization". Reconnecting instead is faster and usually works.
+    """
+    reset_module_state()
+    light.NOTIFY_TIMEOUT = 0.05
+
+    class Refuses(FakeCube):
+        async def start_notify(self, uuid, callback):
+            raise RuntimeError("Insufficient authorization (8)")
+
+    cube = Refuses(KEYSTREAM)
+    light._CLIENTS.clear()
+    entity = Light()
+
+    async def connect(mac, device, waited):
+        light._CLIENTS[mac] = cube
+        return cube
+
+    entity._connect = connect
+    frame, cmd_id = entity._build_frame()
+    try:
+        await entity._write_once(MAC, frame, cmd_id, expect_ack=False,
+                                 strict=True)
+    except RuntimeError as err:
+        assert "unusable" in str(err), err
+        assert light._looks_like_stale_cache(err), \
+            "must trigger a cache clear on reconnect"
+    else:
+        raise AssertionError("should not write to a connection that refused us")
+    assert cube.writes == [], "no write may be attempted"
+
+    # The final attempt tries anyway: some devices simply have no notifications.
+    light._CLIENTS.clear()
+    await entity._write_once(MAC, frame, cmd_id, expect_ack=False, strict=False)
+    assert len(cube.writes) >= 1, "the last attempt must still send"
+    light.NOTIFY_TIMEOUT = 5.0
+
+
+async def test_subscription_result_is_reported():
+    reset_module_state()
+    entity = Light()
+    good = FakeCube(KEYSTREAM)
+    assert await entity._start_ack_listener(MAC, good) is True
+    assert light._ACK_ACTIVE[MAC] is True
+
+    bad = FakeCube(KEYSTREAM, notify_error=RuntimeError("nope"))
+    assert await entity._start_ack_listener(OTHER_MAC, bad) is False
+    assert light._ACK_ACTIVE[OTHER_MAC] is False
