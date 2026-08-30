@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import logging
+from time import monotonic
 from typing import Any
 
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
@@ -374,11 +375,19 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         client = _CLIENTS.get(mac)
         fresh = False
         if client is None or not client.is_connected:
+            # A cold connect is the slow case and it has two very different
+            # causes: waiting for HA to offer a connectable device, or the
+            # proxy taking its time to establish the link. Time them apart, or
+            # the log only shows a long unexplained gap.
+            started = monotonic()
             ble_device = await self._acquire_device(mac)
+            waited = monotonic() - started
             if ble_device is None:
                 raise RuntimeError(
-                    f"BLE device {mac} is not responding (no advertisement)"
+                    f"BLE device {mac} is not responding "
+                    f"(no advertisement after {waited:.1f}s)"
                 )
+            connecting = monotonic()
             try:
                 client = await establish_connection(
                     BleakClientWithServiceCache, ble_device, self._attr_name,
@@ -400,6 +409,10 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                     raise
             _CLIENTS[mac] = client
             fresh = True
+            _LOGGER.debug(
+                "%s: connected to %s — %.1fs waiting for a connectable device, "
+                "%.1fs establishing the link",
+                self._attr_name, mac, waited, monotonic() - connecting)
             await self._start_ack_listener(mac, client)
 
         waiter: asyncio.Future | None = None
@@ -549,10 +562,12 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
             async with _lock_for(mac):
                 for attempt in range(1, SEND_ATTEMPTS + 1):
                     try:
+                        started = monotonic()
                         await self._write_once(mac, frame, cmd_id,
                                               expect_ack=not self._is_group)
-                        _LOGGER.debug("%s: frame sent (attempt %d, %s)",
-                                      self._attr_name, attempt, mac)
+                        _LOGGER.debug("%s: frame sent (attempt %d, %s) "
+                                      "in %.1fs", self._attr_name, attempt,
+                                      mac, monotonic() - started)
                         return
                     except Exception as err:  # noqa: BLE001
                         last_err = err
