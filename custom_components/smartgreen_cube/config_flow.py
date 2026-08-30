@@ -8,10 +8,19 @@ import voluptuous as vol
 
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.components.file_upload import process_uploaded_file
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+from homeassistant.core import callback
 from homeassistant.helpers.selector import (
     FileSelector,
     FileSelectorConfig,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -19,10 +28,14 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_GROUP,
+    CONF_IDLE_DISCONNECT,
     CONF_KEY,
     CONF_MODULES,
     CONF_NONCE,
+    DEFAULT_IDLE_DISCONNECT,
     DOMAIN,
+    MAX_IDLE_DISCONNECT,
+    MIN_IDLE_DISCONNECT,
 )
 from .lap import (
     LapError,
@@ -48,6 +61,11 @@ class SmartGreenConfigFlow(ConfigFlow, domain=DOMAIN):
     """Guides through setup — .lap import or entering keys by hand."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(entry: ConfigEntry) -> OptionsFlow:
+        return SmartGreenOptionsFlow()
 
     async def async_step_bluetooth(
         self, discovery_info: BluetoothServiceInfoBleak
@@ -152,4 +170,37 @@ class SmartGreenConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
+        )
+
+
+class SmartGreenOptionsFlow(OptionsFlow):
+    """How long to keep a Bluetooth connection open after a command.
+
+    The trade-off is latency against battery: a held connection makes the next
+    command immediate, but a connected cube has to keep its radio awake, while
+    an idle one only advertises. 0 disconnects straight after each command.
+    """
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None
+                              ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(
+                data={CONF_IDLE_DISCONNECT: int(user_input[CONF_IDLE_DISCONNECT])}
+            )
+
+        current = self.config_entry.options.get(
+            CONF_IDLE_DISCONNECT, DEFAULT_IDLE_DISCONNECT)
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema({
+                vol.Required(CONF_IDLE_DISCONNECT, default=current): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_IDLE_DISCONNECT,
+                        max=MAX_IDLE_DISCONNECT,
+                        step=10,
+                        unit_of_measurement="s",
+                        mode=NumberSelectorMode.BOX,
+                    )
+                ),
+            }),
         )

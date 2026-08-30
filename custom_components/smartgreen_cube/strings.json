@@ -59,5 +59,16 @@
         "name": "Deep sleep"
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Connection",
+        "description": "How long to keep the Bluetooth connection open after a command. Longer means the next command is immediate; shorter lets the cube's radio sleep sooner. 0 disconnects right after each command.",
+        "data": {
+          "idle_disconnect": "Keep connection open"
+        }
+      }
+    }
   }
 }

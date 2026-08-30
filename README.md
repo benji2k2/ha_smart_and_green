@@ -65,8 +65,10 @@ What the integration does so it does not get in the way:
 - The display switches **immediately** and the command goes out in the
   background — no need to press twice. If the cube does not acknowledge it, the
   display is rolled back afterwards.
-- The connection stays open for **two minutes**, so follow-up commands do not
-  pay the advertising interval again.
+- The connection stays open for **two minutes** by default, so follow-up
+  commands do not pay for a new connection. Adjustable under *Configure* on the
+  integration: longer means the next command is immediate, shorter lets the
+  cube's radio sleep sooner. `0` disconnects right after each command.
 - LMP is a mesh, so **any** open connection can relay a command to **any** cube.
   If one cube is already connected, commands for the other go through it and
   skip the wait entirely — this is how the vendor app works too.

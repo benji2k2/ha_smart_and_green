@@ -45,6 +45,7 @@ class Light(light.SmartGreenCubeLight):
         self._send_task = None
         self._pending = False
         self._before_send = {}
+        self._idle_disconnect = 120.0
         self._attr_name = "TestCube"
         self._attr_is_on = False
         self._attr_brightness = 255
@@ -433,3 +434,39 @@ async def test_diagnostics_never_open_a_connection():
         for forbidden in ("establish_connection", "BleakClient", "write_gatt_char",
                           "start_notify"):
             assert forbidden not in source, f"{name} must not use {forbidden}"
+
+
+# ------------------------------------------------------- configurable hold time
+
+async def test_hold_time_comes_from_the_entry_options():
+    """The connection hold time is the user's latency/battery trade-off."""
+    const = sg.const
+
+    class Entry:
+        entry_id = "abc"
+        def __init__(self, options): self.options = options
+
+    module = {"lmp_addr": "13:40", "name": "CubeSmall", "index": 0, "class": 19}
+
+    default = light.SmartGreenCubeLight(
+        FakeHass(), Entry({}), KEY, NONCE, module)
+    assert default._idle_disconnect == const.DEFAULT_IDLE_DISCONNECT == 120
+
+    custom = light.SmartGreenCubeLight(
+        FakeHass(), Entry({const.CONF_IDLE_DISCONNECT: 15}), KEY, NONCE, module)
+    assert custom._idle_disconnect == 15.0
+
+    immediate = light.SmartGreenCubeLight(
+        FakeHass(), Entry({const.CONF_IDLE_DISCONNECT: 0}), KEY, NONCE, module)
+    assert immediate._idle_disconnect == 0.0, "0 must mean disconnect at once"
+
+
+async def test_hold_time_is_actually_applied():
+    """A short hold really closes the connection; the entity does not ignore it."""
+    reset_module_state()
+    cube = FakeCube(KEYSTREAM, code=0)
+    light._CLIENTS[MAC] = cube
+    light._schedule_idle_disconnect(MAC, 0.05)
+    await asyncio.sleep(0.15)
+    assert cube.disconnected, "the connection should have been closed by now"
+    assert MAC not in light._CLIENTS

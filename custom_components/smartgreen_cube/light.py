@@ -30,10 +30,12 @@ from .const import (
     CHAR_UUID,
     COMPANY_ID,
     CONF_GROUP,
+    CONF_IDLE_DISCONNECT,
     CONF_KEY,
     CONF_MODULES,
     CONF_NONCE,
     DEFAULT_CLASS,
+    DEFAULT_IDLE_DISCONNECT,
     MOD_CLASS,
     MOD_INDEX,
     MOD_LMP,
@@ -50,13 +52,11 @@ from .lmp import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Close the connection after this long without a command. Generous, because
-# setting one up again has to wait for the proxy to catch an advertisement.
-# The cubes advertise about every 11s, but proxies were measured receiving only
-# 8-25% of those, so a cold connect took 27-30s in the field. Every prematurely
-# dropped connection risks paying that again. Not unlimited, so the vendor app
-# can still reach the cubes.
-IDLE_DISCONNECT = 120.0
+# How long a connection is kept open after a command lives in the entry
+# options (DEFAULT_IDLE_DISCONNECT). It is a trade-off: a held connection makes
+# the next command immediate, but a connected cube keeps its radio awake, while
+# an idle one only advertises. Not unlimited by default, so the vendor app can
+# still reach the cubes.
 
 # A proxy cannot start a connection before it has heard an advertisement.
 # The cubes advertise about every 11s, but a proxy with a small scan window
@@ -169,14 +169,14 @@ async def _release_other_clients(keep: str) -> None:
                 pass
 
 
-def _schedule_idle_disconnect(mac: str) -> None:
+def _schedule_idle_disconnect(mac: str, timeout: float) -> None:
     """Close the connection once no command has arrived for a while."""
     if (old := _IDLE_TASKS.pop(mac, None)) is not None:
         old.cancel()
 
     async def _close() -> None:
         try:
-            await asyncio.sleep(IDLE_DISCONNECT)
+            await asyncio.sleep(timeout)
         except asyncio.CancelledError:
             return
         _forget_connection(mac)
@@ -294,6 +294,8 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         self._send_task: asyncio.Task | None = None
         self._pending = False
         self._before_send: dict = {}
+        self._idle_disconnect = float(entry.options.get(
+            CONF_IDLE_DISCONNECT, DEFAULT_IDLE_DISCONNECT))
 
         self._attr_name = module.get(MOD_NAME) or f"Cube {self._lmp}"
         suffix = f"group_{self._lmp}" if is_group else self._lmp
@@ -459,7 +461,7 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
             if waiter is not None:
                 _ACK_WAITERS.get(mac, {}).pop(cmd_id, None)
 
-        _schedule_idle_disconnect(mac)
+        _schedule_idle_disconnect(mac, self._idle_disconnect)
 
     async def _start_ack_listener(self, mac: str, client: Any) -> None:
         """Subscribe to the notify characteristic to receive acknowledgements.

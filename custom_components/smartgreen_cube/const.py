@@ -13,6 +13,12 @@ CONF_NONCE = "nonce"
 CONF_MODULES = "modules"
 CONF_GROUP = "group"
 
+# Options
+CONF_IDLE_DISCONNECT = "idle_disconnect"
+DEFAULT_IDLE_DISCONNECT = 120  # seconds
+MIN_IDLE_DISCONNECT = 0        # 0 disconnects right after each command
+MAX_IDLE_DISCONNECT = 3600
+
 # Module dict fields
 MOD_NAME = "name"
 MOD_LMP = "lmp_addr"

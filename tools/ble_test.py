@@ -446,6 +446,53 @@ def fmt_tlv_value(data):
     return ""
 
 
+async def do_adv_rate(ks, seconds=60.0):
+    """Count advertisements per cube, straight from the radio.
+
+    Home Assistant only logs an advertisement when its payload *changes*, so
+    counting log lines measures how often the cube emits a new frame, not how
+    often it advertises. This listens directly and separates the two: total
+    callbacks versus distinct sequence ids.
+    """
+    print(f"Listening {seconds:.0f}s. Total = advertising events seen, "
+          f"distinct = new frames.\n")
+    seen = {}
+
+    def cb(device, adv):
+        md = adv.manufacturer_data.get(COMPANY_ID)
+        if md is None or len(md) < 8:
+            return
+        name = device.name or adv.local_name or device.address
+        rec = seen.setdefault(name, {"total": 0, "seq": {}, "first": None,
+                                     "last": None, "rssi": []})
+        now = asyncio.get_event_loop().time()
+        rec["total"] += 1
+        rec["seq"].setdefault(md[6], now)
+        rec["first"] = rec["first"] if rec["first"] is not None else now
+        rec["last"] = now
+        rec["rssi"].append(adv.rssi)
+
+    scanner = BleakScanner(detection_callback=cb)
+    await scanner.start()
+    await asyncio.sleep(seconds)
+    await scanner.stop()
+
+    if not seen:
+        print("  No Linkio advertisements received at all.")
+        return
+    for name, rec in sorted(seen.items()):
+        span = max(0.001, (rec["last"] or 0) - (rec["first"] or 0))
+        distinct = len(rec["seq"])
+        avg_rssi = sum(rec["rssi"]) / len(rec["rssi"])
+        print(f"  {name}")
+        print(f"     {rec['total']:4} advertising events over {span:.0f}s"
+              f"  ->  one every {span / max(1, rec['total'] - 1):5.2f}s")
+        print(f"     {distinct:4} distinct sequence ids"
+              f"           ->  a new frame every "
+              f"{span / max(1, distinct - 1):5.1f}s")
+        print(f"     average RSSI {avg_rssi:.0f} dBm\n")
+
+
 async def query_module(dev, ks, frames, wait=3.0):
     """Send query frames and decode the notify replies.
 
@@ -527,7 +574,7 @@ async def dump_gatt(dev):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("action",
-                    choices=["scan", "scanall", "adv", "gatt", "battery", "state", "probe", "probe2", "acktest", "props",
+                    choices=["scan", "scanall", "adv", "advrate", "gatt", "battery", "state", "probe", "probe2", "acktest", "props",
                              "redtest", "whitetest", "sweep", "on", "off"])
     ap.add_argument("--gap", action="store_true",
                     help="switch off between steps (instead of a direct transition)")
@@ -562,6 +609,10 @@ def main():
 
     if args.action == "scanall":
         asyncio.run(do_scan_all())
+        return
+
+    if args.action == "advrate":
+        asyncio.run(do_adv_rate(keystream(key1, nonce), args.wait or 60.0))
         return
 
     if args.action == "adv":

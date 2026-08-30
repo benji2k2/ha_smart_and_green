@@ -64,8 +64,11 @@ Was die Integration tut, damit es nicht stört:
 - Die Anzeige schaltet **sofort** um, gesendet wird im Hintergrund — man muss
   nicht mehrfach drücken. Bestätigt der Cube den Befehl nicht, wird die Anzeige
   nachträglich zurückgesetzt.
-- Die Verbindung bleibt **zwei Minuten** offen, damit Folgebefehle das
-  Werbeintervall nicht erneut bezahlen.
+- Die Verbindung bleibt standardmäßig **zwei Minuten** offen, damit
+  Folgebefehle keinen neuen Verbindungsaufbau bezahlen. Einstellbar über
+  *Konfigurieren* an der Integration: länger heißt, der nächste Befehl wirkt
+  sofort; kürzer heißt, der Funk des Cubes schläft früher. `0` trennt direkt
+  nach jedem Befehl.
 - LMP ist ein Mesh: **jede** offene Verbindung kann einen Befehl an **jeden**
   Cube weiterreichen. Ist ein Cube bereits verbunden, laufen Befehle für den
   anderen darüber und sparen die Wartezeit komplett — genauso arbeitet die

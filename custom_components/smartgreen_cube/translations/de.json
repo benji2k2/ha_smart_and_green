@@ -59,5 +59,16 @@
         "name": "Tiefschlaf"
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Verbindung",
+        "description": "Wie lange die Bluetooth-Verbindung nach einem Befehl offen bleibt. Länger heißt: Der nächste Befehl wirkt sofort. Kürzer heißt: Der Funk des Cubes schläft früher wieder. 0 trennt direkt nach jedem Befehl.",
+        "data": {
+          "idle_disconnect": "Verbindung offen halten"
+        }
+      }
+    }
   }
 }
