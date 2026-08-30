@@ -51,15 +51,18 @@ from .lmp import (
 _LOGGER = logging.getLogger(__name__)
 
 # Close the connection after this long without a command. Generous, because
-# setting one up again has to wait for the next advertisement (~50s) — every
-# prematurely dropped connection costs exactly that on the next press. Not
-# unlimited, so the vendor app can still reach the cubes.
+# setting one up again has to wait for the proxy to catch an advertisement.
+# The cubes advertise about every 11s, but proxies were measured receiving only
+# 8-25% of those, so a cold connect took 27-30s in the field. Every prematurely
+# dropped connection risks paying that again. Not unlimited, so the vendor app
+# can still reach the cubes.
 IDLE_DISCONNECT = 120.0
 
-# The cubes advertise only about every 50s (measured in the field). A proxy
-# cannot start a connection before it has heard an advertisement, so our
-# patience has to exceed a full advertising interval. Sending runs in the
-# background, so the wait never blocks the UI.
+# A proxy cannot start a connection before it has heard an advertisement.
+# The cubes advertise about every 11s, but a proxy with a small scan window
+# misses most of them, which stretches a cold connect to half a minute. The
+# patience below covers that comfortably; sending runs in the background, so
+# the wait never blocks the UI.
 DEVICE_WAIT_TRIES = 30     # attempts to obtain a connectable device
 DEVICE_WAIT_DELAY = 2.0    # seconds between attempts
 CONNECT_ATTEMPTS = 5       # connection attempts by bleak-retry-connector
@@ -145,8 +148,8 @@ async def _release_other_clients(keep: str) -> None:
     An ESP32 proxy has only a few connection slots. If they are all taken the
     next connection attempt fails, and this makes room. It is called only
     *after* such a failure: releasing pre-emptively would only hurt when slots
-    are free, because every new connection has to wait for the cube's next
-    advertisement (~50s).
+    are free, because every new connection has to catch the cube's next
+    advertisement.
     """
     for other in [m for m in _CLIENTS if m != keep]:
         # Never pull a connection out from under a send that is in flight —
@@ -383,7 +386,7 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                 # Likely cause: all of the proxy's connection slots are in
                 # use. Only now do we release the other cube — dropping it
                 # pre-emptively would waste time when slots are free, since
-                # the next connection waits out another advertising interval.
+                # the next connection has to catch an advertisement again.
                 if any(m != mac for m in _CLIENTS):
                     _LOGGER.debug("%s: connection failed, releasing other cubes", self._attr_name)
                     await _release_other_clients(mac)
@@ -510,8 +513,9 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         connected cube can relay it to the target — that is exactly how the
         vendor app works (it holds one connection and addresses every module
         through it). An open connection is therefore worth far more than a
-        matching one, because reaching a cube directly means waiting out its
-        advertising interval (~50s) first.
+        matching one, because reaching a cube directly means waiting for the
+        proxy to catch one of its advertisements first, which took half a
+        minute in the field.
 
         A relay that does not reach the target simply goes unacknowledged, and
         we fall through to connecting to the cube itself.
@@ -694,12 +698,12 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
     def _schedule_send(self, previous: dict) -> None:
         """Show the desired state at once and send in the background.
 
-        A cold connection takes a long time with these lamps: they advertise
-        only about every 50 seconds, and no proxy can start a connection before
-        that. If the service call blocked for that long the UI would look as
-        though nothing had happened — and you press again. So the display
-        switches immediately; if the cube does not acknowledge the command, it
-        is rolled back afterwards.
+        A cold connection takes a long time with these lamps: no proxy can
+        start one before it has caught an advertisement, and in the field that
+        took half a minute. If the service call blocked for that long the UI
+        would look as though nothing had happened — and you press again. So the
+        display switches immediately; if the cube does not acknowledge the
+        command, it is rolled back afterwards.
         """
         if self._send_task is None or self._send_task.done():
             self._before_send = previous

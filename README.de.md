@@ -46,11 +46,18 @@ Die Steuerung läuft über den Bluetooth-Adapter des HA-Hosts oder einen
 
 ### Warum der erste Druck lange dauert
 
-Die Cubes werben nur etwa **alle 50 Sekunden** (im Feld gemessen). Eine
-BLE-Verbindung kann erst beginnen, wenn der Proxy ein solches Advertisement
-gehört hat — ein kalter Verbindungsaufbau wartet daher im Mittel eine halbe,
-schlimmstenfalls eine ganze Werbeperiode. Das ist Stromsparen in der Firmware
-und lässt sich nicht wegprogrammieren.
+Die Cubes werben etwa **alle 11 Sekunden** (aus dem Sequenzzähler ihrer
+Advertisements ermittelt, über zwei Geräte an zwei Tagen). Eine BLE-Verbindung
+kann erst beginnen, wenn der Proxy ein solches Advertisement gehört hat — ein
+kalter Verbindungsaufbau sollte also rund fünf Sekunden dauern.
+
+Im Feld waren es **27–30 Sekunden**, weil der Proxy nur **8–25 %** der
+Advertisements empfangen hat. Bei einem Gerät, das selten wirbt, kostet jedes
+verpasste Paket ein weiteres volles Intervall. Der Hebel ist die Einschaltdauer
+des Empfängers — siehe `esp32_ble_tracker: scan_parameters:` in ESPHome: Ein
+`window` deutlich unter `interval` bedeutet, dass der Proxy nur einen Bruchteil
+der Zeit zuhört. Die Voreinstellung passt zu Geräten, die mehrmals pro Sekunde
+werben, nicht zu diesen.
 
 Was die Integration tut, damit es nicht stört:
 

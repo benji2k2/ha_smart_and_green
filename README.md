@@ -47,10 +47,18 @@ hex strings. Control runs through the HA host's Bluetooth adapter or an
 
 ## Why the first press takes a while
 
-The cubes advertise only about **every 50 seconds** (measured in the field). A
-BLE connection cannot begin until the proxy has heard such an advertisement, so
-a cold connect waits half an advertising period on average and a full one at
-worst. That is firmware power saving and cannot be programmed away.
+The cubes advertise about **every 11 seconds** (derived from the sequence
+counter in their advertisements, across two devices on two days). A BLE
+connection cannot begin until the proxy has heard such an advertisement, so a
+cold connect should take roughly five seconds.
+
+In practice it took **27–30 seconds** in the field, because the proxy received
+only **8–25 %** of the advertisements. With a device that advertises rarely,
+every missed packet costs another full interval. The lever is the proxy's scan
+duty cycle — see `esp32_ble_tracker: scan_parameters:` in ESPHome, where a
+`window` well below `interval` means the receiver is listening only a fraction
+of the time. The default suits devices that advertise many times per second,
+not these.
 
 What the integration does so it does not get in the way:
 
