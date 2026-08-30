@@ -96,6 +96,12 @@ _CONNECT_LOCK = asyncio.Lock()
 # Without this a doomed attempt blocked for 127s in the field.
 CONNECT_TIMEOUT = 45.0
 
+# Subscribing to notifications is only needed to verify acknowledgements. In
+# the field it hung for 16s and then failed, holding up the command behind it,
+# so it gets a short leash: without acknowledgements we still send, we just
+# cannot confirm.
+NOTIFY_TIMEOUT = 5.0
+
 _LOCKS: dict[str, asyncio.Lock] = {}
 # Pending acknowledgements: mac -> cmd_id -> future
 _ACK_WAITERS: dict[str, dict[int, asyncio.Future]] = {}
@@ -230,14 +236,41 @@ def _forget_connection(mac: str) -> None:
             waiter.set_result(None)
 
 
-async def _drop_client(mac: str) -> None:
+async def _drop_client(mac: str, clear_cache: bool = False) -> None:
+    """Disconnect, optionally discarding the cached GATT layout.
+
+    "Characteristic ... was not found" and stray authorization errors are the
+    signature of a stale service cache: the proxy remembers handles that no
+    longer match, so writes fail in confusing ways. Reconnecting alone does not
+    help — the cache has to go too.
+    """
     _forget_connection(mac)
     client = _CLIENTS.pop(mac, None)
-    if client is not None:
+    if client is None:
+        return
+    if clear_cache and hasattr(client, "clear_cache"):
         try:
-            await client.disconnect()
+            await client.clear_cache()
+            _LOGGER.debug("Discarded the cached GATT layout for %s", mac)
         except Exception:  # noqa: BLE001
             pass
+    try:
+        await client.disconnect()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+#: Error texts seen in the field when the cached GATT layout no longer matched.
+#: 133 is the ESP32's generic GATT failure, which shows up in exactly this case.
+_STALE_CACHE_HINTS = (
+    "not found", "authorization", "invalid handle", "attribute",
+    "gatt error", "error=133",
+)
+
+
+def _looks_like_stale_cache(err: Exception) -> bool:
+    text = str(err).lower()
+    return any(hint in text for hint in _STALE_CACHE_HINTS)
 
 
 async def async_setup_entry(
@@ -547,9 +580,10 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                 waiter.set_result(code)
 
         try:
-            await client.start_notify(CHAR_UUID, _on_notify)
+            await asyncio.wait_for(
+                client.start_notify(CHAR_UUID, _on_notify), NOTIFY_TIMEOUT)
             _ACK_ACTIVE[mac] = True
-        except Exception as err:  # noqa: BLE001
+        except (Exception, asyncio.TimeoutError) as err:  # noqa: BLE001
             _ACK_ACTIVE[mac] = False
             _LOGGER.debug("%s: acknowledgements unavailable (%s)",
                           self._attr_name, err)
@@ -649,7 +683,8 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                                 "%s: attempt %d/%d via %s failed: %s",
                                 self._attr_name, attempt, SEND_ATTEMPTS,
                                 mac, err)
-                            await _drop_client(mac)
+                            await _drop_client(
+                                mac, clear_cache=_looks_like_stale_cache(err))
                             if attempt == 1 and lmp is not None:
                                 _MAC_CACHE.pop(lmp, None)
                                 mac2 = _resolve_mac(self.hass, lmp)

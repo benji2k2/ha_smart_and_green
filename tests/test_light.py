@@ -595,3 +595,68 @@ async def test_weak_signal_is_not_warned_about_on_every_command():
         light._LOGGER.warning = original
         bluetooth.async_last_service_info = original_info
         light._WEAK_WARNED.clear()
+
+
+# ------------------------------------------------- stale cache and slow notify
+
+async def test_slow_notify_does_not_hold_up_the_command():
+    """Regression: subscribing hung 16s, then failed, delaying the write.
+
+    Acknowledgements are a nice-to-have. Without them we still send, we just
+    cannot confirm — so the subscription must not block the command.
+    """
+    reset_module_state()
+    light.NOTIFY_TIMEOUT = 0.05
+
+    class SlowNotify(FakeCube):
+        async def start_notify(self, uuid, callback):
+            await asyncio.sleep(5)
+
+    cube = SlowNotify(KEYSTREAM)
+    entity = Light()
+    started = asyncio.get_event_loop().time()
+    try:
+        await entity._start_ack_listener(MAC, cube)
+        elapsed = asyncio.get_event_loop().time() - started
+        assert elapsed < 1.0, f"subscription blocked for {elapsed:.1f}s"
+        assert light._ACK_ACTIVE.get(MAC) is False
+    finally:
+        light.NOTIFY_TIMEOUT = 5.0
+
+
+async def test_stale_cache_errors_are_recognised():
+    """These strings are what the device actually returned in the field."""
+    real_errors = [
+        "Characteristic 00005002-0000-1000-8000-00805f9b34fb was not found!",
+        "BluetoothGATTErrorResponse: Insufficient authorization (8)",
+        "Bluetooth GATT Error address=FB:3E handle=17 error=133",
+    ]
+    for text in real_errors:
+        assert light._looks_like_stale_cache(Exception(text)), text
+
+    # A plain connection problem is not a cache problem.
+    assert not light._looks_like_stale_cache(Exception("timed out"))
+    assert not light._looks_like_stale_cache(Exception("no advertisement"))
+
+
+async def test_cache_is_cleared_only_when_it_looks_stale():
+    reset_module_state()
+
+    class Cube(FakeCube):
+        def __init__(self):
+            super().__init__(KEYSTREAM)
+            self.cleared = False
+
+        async def clear_cache(self):
+            self.cleared = True
+
+    stale = Cube()
+    light._CLIENTS[MAC] = stale
+    await light._drop_client(MAC, clear_cache=True)
+    assert stale.cleared and stale.disconnected
+
+    ordinary = Cube()
+    light._CLIENTS[MAC] = ordinary
+    await light._drop_client(MAC, clear_cache=False)
+    assert not ordinary.cleared, "a healthy cache must be kept"
+    assert ordinary.disconnected

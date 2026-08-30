@@ -63,11 +63,9 @@ Zwei Dinge machen ihn langsam, beide sind adressiert:
   Rauschpegel braucht eine Verbindung mehr Wiederholungen und bricht öfter ab,
   ein näherer Proxy hilft also.
 
-  Wie viel der Verzögerung auf das Signal und wie viel auf die Slot-Konkurrenz
-  entfiel, ist **nicht geklärt**. Der schnelle Durchlauf danach fand bei −89 dBm
-  statt, was nach einer Antwort aussieht — zwischenzeitlich wurde aber eine
-  Balkontür geöffnet. Der Funkweg hat sich also zusammen mit dem Code geändert,
-  beides lässt sich nicht trennen.
+  Spätere Messungen relativieren das: Mit serialisierten Verbindungen stand der
+  Link in drei kalten Durchläufen nach 0,3–4,2 s — bei −90 bis −95 dBm. Auf
+  diese Entfernungen war nicht das Signal die Ursache für träges Schalten.
 
   Beim Lesen der Signalstärke Vorsicht: Sie wird an *angekommenen*
   Advertisements gemessen. Durch ein Hindernis gehen die schwachen verloren und

@@ -63,10 +63,9 @@ Two things make that slow, and both are addressed:
   floor a link needs more retries and drops more often, so a proxy closer to
   the cube helps.
 
-  How much of the delay was signal and how much was contention is not settled.
-  The fast run afterwards happened at −89 dBm, which looks like an answer, but
-  a balcony door had been opened in between — the radio path changed along with
-  the code, so the two cannot be separated.
+  Later measurement put this in perspective: with connections serialised, the
+  link came up in 0.3–4.2 s at −90 to −95 dBm across three cold runs. At these
+  distances the signal was not what made switching slow.
 
   Be careful reading RSSI here: it is measured on advertisements that *arrived*.
   Through an obstacle the weak ones are lost and only the lucky ones are
