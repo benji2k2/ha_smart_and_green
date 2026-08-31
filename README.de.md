@@ -137,13 +137,13 @@ vollständig.
 
 ## Reichweite beachten
 
-Die Cubes sind BLE-Geräte mit kleiner Antenne. Unter **−75 dBm** wird die
+Die Cubes sind BLE-Geräte mit kleiner Antenne. Unter **−80 dBm** wird die
 Verbindung unzuverlässig: Sie kommt oft noch zustande, bricht dann aber während
 der Service-Discovery ab — das sieht wie ein sporadischer Softwarefehler aus,
 ist aber schlicht Funkreichweite. Fünf Meter durch eine massive Wand reichen
 erfahrungsgemäß **nicht**.
 
-Der Sensor **Signalstärke** zeigt den aktuellen Wert, und unter −75 dBm warnt
+Der Sensor **Signalstärke** zeigt den aktuellen Wert, und unter −80 dBm warnt
 die Integration im Protokoll (höchstens alle 15 Minuten je Gerät). Abhilfe ist
 ein Bluetooth-Proxy näher am Cube — Home Assistant wählt automatisch den mit
 dem besten Empfang.

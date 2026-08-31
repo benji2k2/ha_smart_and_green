@@ -76,8 +76,10 @@ RETRY_BACKOFF = 0.4        # seconds to wait between attempts
 SUBSCRIPTION_BACKOFF = 2.0
 
 # Below this signal strength the link becomes unreliable: the connection often
-# still succeeds, but then drops during service discovery.
-WEAK_RSSI = -75
+# still succeeds, but then drops during service discovery. Set at -80 rather
+# than -75: an installation measured at about -75 ran reliably, so warning
+# there would cry wolf.
+WEAK_RSSI = -80
 # Do not repeat the weak-signal warning on every single command.
 WEAK_RSSI_REPEAT = 900.0  # seconds
 _WEAK_WARNED: dict[str, float] = {}

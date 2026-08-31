@@ -131,13 +131,13 @@ the fragile part altogether.
 
 ## Mind the range
 
-The cubes are BLE devices with a small antenna. Below **−75 dBm** the link
+The cubes are BLE devices with a small antenna. Below **−80 dBm** the link
 becomes unreliable: the connection often still succeeds but then drops during
 service discovery — which looks like a sporadic software fault when it is
 really radio range. Five metres through a solid wall is, in practice, **not**
 enough.
 
-The **signal strength** sensor shows the current value, and below −75 dBm the
+The **signal strength** sensor shows the current value, and below −80 dBm the
 integration warns in the log (at most once every 15 minutes per device). The
 remedy is a Bluetooth proxy closer to the cube — Home Assistant automatically
 picks the one with the best reception.
