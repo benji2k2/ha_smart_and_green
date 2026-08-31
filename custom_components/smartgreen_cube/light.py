@@ -610,9 +610,16 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
 
         try:
             write_started = monotonic()
-            await asyncio.wait_for(
-                client.write_gatt_char(target, frame, response=acked),
-                WRITE_LIMIT.seconds)
+            limit = WRITE_LIMIT.seconds
+            try:
+                await asyncio.wait_for(
+                    client.write_gatt_char(target, frame, response=acked),
+                    limit)
+            except asyncio.TimeoutError as err:
+                # TimeoutError carries no message, and an empty reason in the
+                # log says nothing about what went wrong.
+                raise RuntimeError(
+                    f"write timed out after {limit:.1f}s") from err
             WRITE_LIMIT.record(monotonic() - write_started)
 
             # Repeat only when nothing at all confirms arrival. An

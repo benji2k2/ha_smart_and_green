@@ -898,7 +898,10 @@ async def test_a_hanging_write_is_cut_short():
     started = asyncio.get_event_loop().time()
     try:
         await entity._write_once(MAC, frame, cmd_id, expect_ack=False)
-    except (asyncio.TimeoutError, Exception):
+    except RuntimeError as err:
+        assert "timed out" in str(err), \
+            f"an empty reason in the log says nothing: {err!r}"
+    except Exception:
         pass
     elapsed = asyncio.get_event_loop().time() - started
     light.WRITE_LIMIT = light.AdaptiveLimit(floor=1.0, ceiling=5.0)
