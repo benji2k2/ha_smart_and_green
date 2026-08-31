@@ -75,13 +75,6 @@ RETRY_BACKOFF = 0.4        # seconds to wait between attempts
 # a new session. Cheap next to the eleven seconds a doomed write costs.
 SUBSCRIPTION_BACKOFF = 2.0
 
-# After this much idle time the cube appears to go into a power-saving state:
-# measured failure rate of the notification subscription was 2/10 for gaps of
-# 7-17s but 4/7 for gaps of 99-1582s, and 0/4 immediately after a failure had
-# woken it. Past this point we deliver the command first and only then try to
-# subscribe, rather than spending the wake-up on a subscription that is more
-# likely than not to fail.
-WAKE_AFTER_IDLE = 60.0
 
 # Below this signal strength the link becomes unreliable: the connection often
 # still succeeds, but then drops during service discovery. Set at -80 rather
@@ -511,12 +504,10 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         return client
 
     async def _write_once(self, mac: str, frame: bytes, cmd_id: int,
-                          expect_ack: bool, strict: bool = True) -> None:
+                          expect_ack: bool) -> None:
         """Write a frame and wait for the cube to acknowledge it.
 
-        Keeps the connection open for follow-up commands. With ``strict`` a
-        connection whose notify subscription failed is discarded straight away
-        instead of being written to — see :meth:`_start_ack_listener`.
+        Keeps the connection open for follow-up commands.
         """
         client = _CLIENTS.get(mac)
         fresh = False
@@ -547,26 +538,23 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                 else:
                     client = await self._connect(mac, ble_device, waited)
                     fresh = True
-            # A GATT write with response is itself proof of delivery at the
-            # ATT layer — weaker than the cube's own acknowledgement, but it
-            # does confirm the frame arrived. On a cube that has been idle long
-            # enough to have dozed off, that is the better trade: get the
-            # command in first, then subscribe for the ones that follow.
-            entry = _LAST_DISCONNECT.get(mac)
-            dozed = entry is not None and monotonic() - entry[0] > WAKE_AFTER_IDLE
-            if fresh and dozed:
-                _LOGGER.debug("%s: idle for %s — sending before subscribing",
-                              self._attr_name, _since_disconnect(mac))
-            elif fresh:
-                outcome = await self._start_ack_listener(mac, client)
-                if outcome != "ok" and strict:
-                    # Every connection whose subscription failed also had its
-                    # write refused, eleven seconds later — five times out of
-                    # five, whether the subscription was refused outright or
-                    # timed out. Reconnecting instead took under a second.
-                    # The last attempt still writes regardless, for devices
-                    # that simply have no notifications.
-                    raise RuntimeError(f"subscription {outcome}")
+            # On a fresh connection the command goes out before we subscribe.
+            # Subscribing first fails often — measured between 20% and 80% of
+            # the time depending on the session — and each failure costs about
+            # nine seconds for a reconnect. Writing first was observed to work
+            # immediately even where subscribing would not have.
+            #
+            # The command is still verified, just one layer lower: a GATT write
+            # with response is acknowledged by the device's ATT layer, which
+            # proves the frame arrived. What is given up is the cube's own LMP
+            # acknowledgement for this one frame, which confirms it also
+            # *accepted* it. Every command after this one on the same
+            # connection gets that too, because we subscribe immediately
+            # afterwards.
+            if fresh:
+                _LOGGER.debug("%s: fresh connection (%s) — sending before "
+                              "subscribing", self._attr_name,
+                              _since_disconnect(mac))
 
         waiter: asyncio.Future | None = None
 
@@ -588,21 +576,14 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         try:
             await client.write_gatt_char(target, frame, response=acked)
 
-            # Right after a fresh connection the module occasionally swallows
-            # the first write, so send it once more. The repeat carries the
-            # same cmd_id, so the cube acknowledges it under the same number.
-            if fresh:
-                await asyncio.sleep(0.12)
-                try:
-                    await client.write_gatt_char(target, frame, response=acked)
-                except Exception:  # noqa: BLE001
-                    pass
-
-            # Nothing will tell us whether this arrived: either it is a group
-            # broadcast (FF:FF has no single sender to answer) or the
-            # subscription did not come up. In the field a single unverified
-            # broadcast reached only one of two cubes, so send it again.
-            if waiter is None:
+            # Repeat only when nothing at all confirms arrival. An
+            # acknowledged GATT write already does — the device's ATT layer
+            # answers it — so a single cube needs no repeat even without the
+            # cube's own acknowledgement. A group broadcast does: ATT only
+            # confirms the relaying cube received it, not that the mesh carried
+            # it onwards, and in the field one broadcast reached only one of
+            # two cubes.
+            if self._is_group or not acked:
                 for _ in range(UNVERIFIED_REPEATS - 1):
                     await asyncio.sleep(UNVERIFIED_REPEAT_GAP)
                     try:
@@ -760,8 +741,7 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                             started = monotonic()
                             await self._write_once(
                                 mac, frame, cmd_id,
-                                expect_ack=not self._is_group,
-                                strict=attempt < SEND_ATTEMPTS)
+                                expect_ack=not self._is_group)
                             _LOGGER.debug("%s: frame sent (attempt %d, %s) "
                                           "in %.1fs", self._attr_name, attempt,
                                           mac, monotonic() - started)

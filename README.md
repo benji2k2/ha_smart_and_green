@@ -101,10 +101,12 @@ What the integration does so it does not get in the way:
   integration: longer means the next command is immediate, shorter lets the
   cube's radio sleep sooner. `0` disconnects right after each command.
 
-  For scale: the vendor app caps a connection at **20 seconds**
-  (`CONX_MAX_TIMER`), measured from opening rather than from the last command.
-  The default here is already six times more generous, so a shorter setting is
-  not unusual — it is closer to what the lamps see from the app.
+  For scale: the vendor app holds its connection for **as long as it is in the
+  foreground**, with no time limit at all — it connects when you open it and
+  disconnects when you background it. That is why it feels quicker: it pays for
+  the connection while you are still navigating to the lamp, before you can
+  press anything. A longer setting here moves closer to that behaviour, at the
+  cost the app also pays in battery.
 - LMP is a mesh, so **any** open connection can relay a command to **any** cube.
   If one cube is already connected, commands for the other go through it and
   skip the wait entirely — this is how the vendor app works too.
@@ -229,13 +231,17 @@ writes to characteristic `00005002-0000-1000-8000-00805f9b34fb` (service
 `payload XOR AES128-ECB(keyCrypt1, nonce)`. The integration icon uses the motif
 from the original app.
 
-The connection sequence follows the vendor app: connect, discover services,
-subscribe, then write — with acknowledged writes (`with_response`) and without
-ever discarding the service cache, both of which the app also does. Where this
-integration goes further is in what happens when that sequence does not work:
-retries, relaying through whichever cube is already connected, and delivering
-the command before subscribing when a lamp has been idle long enough to doze
-off.
+The connection sequence follows the vendor app — connect, discover services,
+write — with acknowledged writes (`with_response`) and without ever discarding
+the service cache, both of which the app also does. One step is deliberately
+reordered: on a fresh connection the command goes out *before* subscribing for
+notifications, because subscribing first was measured to fail between 20% and
+80% of the time and each failure costs a reconnect. The command is still
+confirmed, one layer lower, by the acknowledged write itself.
+
+Where this integration goes further than the app: retries, relaying through
+whichever cube is already connected, and rolling back the displayed state when
+a command is not confirmed.
 
 ## Status
 

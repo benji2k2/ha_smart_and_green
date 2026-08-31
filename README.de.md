@@ -105,11 +105,13 @@ Was die Integration tut, damit es nicht stört:
   sofort; kürzer heißt, der Funk des Cubes schläft früher. `0` trennt direkt
   nach jedem Befehl.
 
-  Zur Einordnung: Die Hersteller-App begrenzt eine Verbindung auf **20 Sekunden**
-  (`CONX_MAX_TIMER`), gerechnet ab dem Öffnen statt ab dem letzten Befehl. Der
-  Standard hier ist also bereits sechsmal großzügiger — eine kürzere Einstellung
-  ist nichts Ungewöhnliches, sondern näher an dem, was die Leuchten von der App
-  gewohnt sind.
+  Zur Einordnung: Die Hersteller-App hält ihre Verbindung, **solange sie im
+  Vordergrund ist** — ganz ohne Zeitlimit. Sie verbindet beim Öffnen und trennt
+  erst, wenn man sie in den Hintergrund schickt. Genau deshalb wirkt sie
+  flüssiger: Sie bezahlt den Verbindungsaufbau, während man noch zur Lampe
+  navigiert, also bevor man etwas drücken kann. Ein höherer Wert hier nähert
+  sich diesem Verhalten an — zu denselben Kosten beim Akku, die die App
+  ebenfalls trägt.
 - LMP ist ein Mesh: **jede** offene Verbindung kann einen Befehl an **jeden**
   Cube weiterreichen. Ist ein Cube bereits verbunden, laufen Befehle für den
   anderen darüber und sparen die Wartezeit komplett — genauso arbeitet die

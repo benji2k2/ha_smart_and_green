@@ -163,15 +163,16 @@ async def test_group_broadcast_is_repeated_and_never_awaits_an_ack():
 
 
 async def test_write_falls_back_when_notifications_are_unavailable():
-    """Without notifications we cannot verify, but must not fail either.
+    """A refused subscription must not fail the command.
 
-    The frame is repeated in that case: nothing will report it missing, so a
-    single write would be the one unguarded path through this code.
+    The frame still goes out and is confirmed by the acknowledged GATT write;
+    only the cube's own acknowledgement is missing, so later commands on this
+    connection stay unverified rather than failing.
     """
     reset_module_state()
     cube = FakeCube(KEYSTREAM, notify_error=RuntimeError("no notify"))
     await write(Light(), cube)
-    assert len(cube.writes) == light.UNVERIFIED_REPEATS
+    assert cube.writes, "the command must still be delivered"
     assert light._ACK_ACTIVE.get(MAC) is False
 
 
@@ -713,48 +714,6 @@ async def test_cache_is_cleared_only_when_it_looks_stale():
     assert ordinary.disconnected
 
 
-async def test_a_connection_whose_subscription_failed_is_not_written_to():
-    """Field data: notify failing predicted the write failing, three for three.
-
-    Those writes took eleven seconds each to be refused with "Insufficient
-    authorization". Reconnecting instead is faster and usually works.
-    """
-    reset_module_state()
-    _notify_limit = light.NOTIFY_TIMEOUT
-    light.NOTIFY_TIMEOUT = 0.05
-
-    class Refuses(FakeCube):
-        async def start_notify(self, uuid, callback):
-            raise RuntimeError("Insufficient authorization (8)")
-
-    cube = Refuses(KEYSTREAM)
-    light._CLIENTS.clear()
-    entity = Light()
-
-    async def connect(mac, device, waited):
-        light._CLIENTS[mac] = cube
-        return cube
-
-    entity._connect = connect
-    frame, cmd_id = entity._build_frame()
-    try:
-        await entity._write_once(MAC, frame, cmd_id, expect_ack=False,
-                                 strict=True)
-    except RuntimeError as err:
-        assert "refused" in str(err), err
-        assert light._looks_like_stale_cache(err), \
-            "must trigger a cache clear on reconnect"
-    else:
-        raise AssertionError("should not write to a connection that refused us")
-    assert cube.writes == [], "no write may be attempted"
-
-    # The final attempt tries anyway: some devices simply have no notifications.
-    light._CLIENTS.clear()
-    await entity._write_once(MAC, frame, cmd_id, expect_ack=False, strict=False)
-    assert len(cube.writes) >= 1, "the last attempt must still send"
-    light.NOTIFY_TIMEOUT = _notify_limit
-
-
 async def test_subscription_result_is_reported():
     """Three outcomes, because the caller reacts differently to each."""
     reset_module_state()
@@ -780,73 +739,6 @@ async def test_subscription_result_is_reported():
         light.NOTIFY_TIMEOUT = _notify_limit
 
 
-async def test_a_slow_subscription_also_abandons_the_connection():
-    """A timeout predicts a failing write just as a refusal does.
-
-    v0.9.4 assumed otherwise and sent anyway; the field log then showed two
-    timeouts followed by two writes failing after eleven seconds each. The
-    tally is 5:5 — subscription failure predicts write failure, whatever its
-    kind. What must *not* happen is discarding the GATT cache over it: that
-    forces a rediscovery costing 30-45s.
-    """
-    reset_module_state()
-    _notify_limit = light.NOTIFY_TIMEOUT
-    light.NOTIFY_TIMEOUT = 0.05
-
-    class Slow(FakeCube):
-        async def start_notify(self, uuid, callback):
-            await asyncio.sleep(5)
-
-    cube = Slow(KEYSTREAM)
-
-    async def connect(mac, device, waited):
-        light._CLIENTS[mac] = cube
-        return cube
-
-    entity = Light()
-    entity._connect = connect
-    frame, cmd_id = entity._build_frame()
-    try:
-        await entity._write_once(MAC, frame, cmd_id, expect_ack=False,
-                                 strict=True)
-    except RuntimeError as err:
-        assert "timeout" in str(err), err
-        assert cube.writes == [], "must not write to a connection that stalled"
-    else:
-        raise AssertionError("a stalled subscription must abandon the link")
-    finally:
-        light.NOTIFY_TIMEOUT = _notify_limit
-
-
-async def test_a_refusal_still_abandons_the_connection():
-    """The 3:3 correlation was with refusals, and that reasoning still holds."""
-    reset_module_state()
-
-    class Refuses(FakeCube):
-        async def start_notify(self, uuid, callback):
-            raise RuntimeError("Insufficient authorization (8)")
-
-    cube = Refuses(KEYSTREAM)
-
-    async def connect(mac, device, waited):
-        light._CLIENTS[mac] = cube
-        return cube
-
-    entity = Light()
-    entity._connect = connect
-    frame, cmd_id = entity._build_frame()
-    try:
-        await entity._write_once(MAC, frame, cmd_id, expect_ack=False,
-                                 strict=True)
-    except RuntimeError as err:
-        assert "refused" in str(err), err
-        assert light._looks_like_stale_cache(err), \
-            "the device's own wording decides whether the cache goes"
-    else:
-        raise AssertionError("a refusal must abandon the connection")
-    assert cube.writes == []
-
-
 async def test_a_timeout_never_discards_the_gatt_cache():
     """Rediscovery is expensive; only wrong handles justify it."""
     assert not light._looks_like_stale_cache(
@@ -856,24 +748,35 @@ async def test_a_timeout_never_discards_the_gatt_cache():
         RuntimeError("subscription refused: Insufficient authorization (8)"))
 
 
-async def test_an_unverifiable_command_is_repeated_too():
+async def test_an_unacknowledged_write_is_repeated():
     """A single cube whose subscription failed had no safety net at all.
 
-    The repeat used to be tied to group broadcasts. But a command that cannot
-    be confirmed is equally exposed however it got that way — and on the final
-    attempt we send even without a subscription, so that path needs the repeat
-    most of all.
+    An acknowledged GATT write confirms arrival by itself, so a single cube
+    needs no repeat. Where the characteristic offers no acknowledged write,
+    nothing confirms anything and the frame is sent again.
     """
     reset_module_state()
     light.UNVERIFIED_REPEAT_GAP = 0.01
     _notify_limit = light.NOTIFY_TIMEOUT
     light.NOTIFY_TIMEOUT = 0.05
 
-    class Slow(FakeCube):
-        async def start_notify(self, uuid, callback):
-            await asyncio.sleep(5)
+    class NoAckWrites(FakeCube):
+        """A characteristic that only offers write-without-response."""
 
-    cube = Slow(KEYSTREAM)
+        def __init__(self, ks):
+            super().__init__(ks)
+
+            class Char:
+                uuid = light.CHAR_UUID
+                properties = ("write-without-response", "notify")
+
+            class Services:
+                def get_characteristic(self, _uuid):
+                    return Char()
+
+            self.services = Services()
+
+    cube = NoAckWrites(KEYSTREAM)
 
     async def connect(mac, device, waited):
         light._CLIENTS[mac] = cube
@@ -883,12 +786,9 @@ async def test_an_unverifiable_command_is_repeated_too():
     entity._connect = connect
     frame, cmd_id = entity._build_frame()
     try:
-        # strict=False is the final attempt, the one that sends regardless.
-        await entity._write_once(MAC, frame, cmd_id, expect_ack=True,
-                                 strict=False)
-        # One write, one fresh-connection repeat, then the unverified repeats.
-        assert len(cube.writes) >= light.UNVERIFIED_REPEATS, \
-            f"only {len(cube.writes)} writes for an unverifiable command"
+        await entity._write_once(MAC, frame, cmd_id, expect_ack=True)
+        assert len(cube.writes) == light.UNVERIFIED_REPEATS, \
+            f"{len(cube.writes)} writes where nothing confirms arrival"
     finally:
         light.NOTIFY_TIMEOUT = _notify_limit
         light.UNVERIFIED_REPEAT_GAP = 0.2
@@ -919,14 +819,14 @@ async def test_the_subscription_limit_stays_short():
 
 # ----------------------------------------------------- waking a dozing cube
 
-async def test_a_long_idle_cube_gets_the_command_before_the_subscription():
-    """Measured: the subscription mostly fails after a long idle, not a short one.
+async def test_a_fresh_connection_gets_the_command_before_the_subscription():
+    """Subscribing first fails between 20% and 80% of the time, costing ~9s.
 
-    2/10 failures for gaps of 7-17s, 4/7 for gaps of 99-1582s, and 0/4 right
-    after a failure had woken the cube. Spending the wake-up on a subscription
-    that will probably fail costs about ten seconds; delivering the command
-    first costs nothing, since an acknowledged GATT write is itself proof the
-    frame arrived.
+    Writing first was observed to deliver immediately where subscribing would
+    not have. The command is still verified one layer lower: an acknowledged
+    GATT write proves the frame arrived. Only the cube's own acknowledgement
+    for this one frame is given up, and the subscription that follows covers
+    every command after it.
     """
     reset_module_state()
     order = []
@@ -950,17 +850,14 @@ async def test_a_long_idle_cube_gets_the_command_before_the_subscription():
     entity._connect = connect
     frame, cmd_id = entity._build_frame()
 
-    # Idle well past the threshold: the cube has had time to doze off.
-    light._LAST_DISCONNECT[MAC] = (
-        light.monotonic() - light.WAKE_AFTER_IDLE - 30, "idle")
     await entity._write_once(MAC, frame, cmd_id, expect_ack=False)
 
     assert order[0] == "write", f"the command must go first, got {order}"
     assert "subscribe" in order, "and the subscription must still happen after"
 
 
-async def test_a_recently_used_cube_subscribes_first():
-    """With the cube awake the subscription works, so verify properly."""
+async def test_a_reused_connection_still_verifies():
+    """An established connection is already subscribed, so nothing is lost."""
     reset_module_state()
     order = []
 
@@ -983,6 +880,12 @@ async def test_a_recently_used_cube_subscribes_first():
     entity._connect = connect
     frame, cmd_id = entity._build_frame()
 
-    light._LAST_DISCONNECT[MAC] = (light.monotonic() - 5, "idle")
+    # First command opens the connection: write, then subscribe.
     await entity._write_once(MAC, frame, cmd_id, expect_ack=True)
-    assert order[0] == "subscribe", f"verification comes first here, got {order}"
+    assert order[:2] == ["write", "subscribe"], order
+
+    # The next one rides the open connection and is acknowledged by the cube.
+    order.clear()
+    frame2, cmd_id2 = entity._build_frame()
+    await entity._write_once(MAC, frame2, cmd_id2, expect_ack=True)
+    assert order == ["write"], f"already subscribed, got {order}"
