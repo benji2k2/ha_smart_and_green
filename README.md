@@ -263,9 +263,17 @@ No Home Assistant install required; see [tests/README.md](tests/README.md).
 
 ## Icons
 
-The integration icon lives in `custom_components/smartgreen_cube/brand/`
-(`icon.png` 256px, `icon@2x.png` 512px, `logo.png`). The motif is the vendor
-logo from the original app.
+The icons live in `custom_components/smartgreen_cube/brand/` and Home Assistant
+picks them up from there directly, from **2026.3** onwards — local brand images
+take priority over the brands CDN, and no pull request to `home-assistant/brands`
+is needed (that repository no longer accepts custom integrations).
+
+Both a light and a dark variant are supplied: the logo is almost entirely
+near-black on transparent, so on a dark theme the plain icon would be close to
+invisible. On older Home Assistant versions the icons simply do not appear; the
+integration itself is unaffected.
+
+The motif is the vendor logo from the original app.
 
 ## Licence
 
