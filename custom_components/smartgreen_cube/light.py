@@ -113,10 +113,12 @@ CONNECT_TIMEOUT = 45.0
 # loss on the failure path and buys nothing on the success path.
 NOTIFY_TIMEOUT = 2.0
 
-# A write has no time limit of its own in bleak. In the field one hung for 16.1s
-# before failing with "Insufficient authorization", where successful writes take
-# about a second. Every one of those seconds is spent not retrying.
-WRITE_TIMEOUT = 5.0
+# A write has no time limit of its own in bleak, and in the field one hung for
+# 16.1s before failing. Successful writes are far quicker: measured together
+# with the subscription that follows them, 0.32-0.76s. The limit is set at
+# roughly three times the slowest of those, because every second beyond it is
+# spent not retrying — and the retry is what works.
+WRITE_TIMEOUT = 2.5
 
 # When and why we last dropped each connection. The subscription fails
 # intermittently at any signal level, and the leading theory is that the cube

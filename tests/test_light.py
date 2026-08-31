@@ -892,11 +892,13 @@ async def test_a_reused_connection_still_verifies():
 
 
 async def test_a_hanging_write_is_cut_short():
-    """One write hung for 16.1s before failing; successful ones take about 1s.
+    """One write hung for 16.1s before failing; successful ones take under 1s.
 
-    Those seconds are spent not retrying, and the retry is what works.
+    Measured together with the subscription that follows: 0.32-0.76s. Every
+    second of limit beyond that is spent not retrying, and the retry is what
+    works.
     """
-    assert light.WRITE_TIMEOUT <= 10, "a stuck write must not block the retry"
+    assert light.WRITE_TIMEOUT <= 3, "a stuck write must not block the retry"
 
     reset_module_state()
     light.WRITE_TIMEOUT = 0.05
@@ -915,5 +917,5 @@ async def test_a_hanging_write_is_cut_short():
     except (asyncio.TimeoutError, Exception):
         pass
     elapsed = asyncio.get_event_loop().time() - started
-    light.WRITE_TIMEOUT = 5.0
+    light.WRITE_TIMEOUT = 2.5
     assert elapsed < 1.0, f"gave up only after {elapsed:.1f}s"
