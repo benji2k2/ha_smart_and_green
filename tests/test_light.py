@@ -915,3 +915,74 @@ async def test_the_subscription_limit_stays_short():
     """
     assert light.NOTIFY_TIMEOUT <= 2.0, (
         "a longer limit only delays the reconnect that actually works")
+
+
+# ----------------------------------------------------- waking a dozing cube
+
+async def test_a_long_idle_cube_gets_the_command_before_the_subscription():
+    """Measured: the subscription mostly fails after a long idle, not a short one.
+
+    2/10 failures for gaps of 7-17s, 4/7 for gaps of 99-1582s, and 0/4 right
+    after a failure had woken the cube. Spending the wake-up on a subscription
+    that will probably fail costs about ten seconds; delivering the command
+    first costs nothing, since an acknowledged GATT write is itself proof the
+    frame arrived.
+    """
+    reset_module_state()
+    order = []
+
+    class Cube(FakeCube):
+        async def start_notify(self, uuid, callback):
+            order.append("subscribe")
+            await super().start_notify(uuid, callback)
+
+        async def write_gatt_char(self, char, frame, response=False):
+            order.append("write")
+            await super().write_gatt_char(char, frame, response=response)
+
+    cube = Cube(KEYSTREAM)
+
+    async def connect(mac, device, waited):
+        light._CLIENTS[mac] = cube
+        return cube
+
+    entity = Light()
+    entity._connect = connect
+    frame, cmd_id = entity._build_frame()
+
+    # Idle well past the threshold: the cube has had time to doze off.
+    light._LAST_DISCONNECT[MAC] = (
+        light.monotonic() - light.WAKE_AFTER_IDLE - 30, "idle")
+    await entity._write_once(MAC, frame, cmd_id, expect_ack=False)
+
+    assert order[0] == "write", f"the command must go first, got {order}"
+    assert "subscribe" in order, "and the subscription must still happen after"
+
+
+async def test_a_recently_used_cube_subscribes_first():
+    """With the cube awake the subscription works, so verify properly."""
+    reset_module_state()
+    order = []
+
+    class Cube(FakeCube):
+        async def start_notify(self, uuid, callback):
+            order.append("subscribe")
+            await super().start_notify(uuid, callback)
+
+        async def write_gatt_char(self, char, frame, response=False):
+            order.append("write")
+            await super().write_gatt_char(char, frame, response=response)
+
+    cube = Cube(KEYSTREAM)
+
+    async def connect(mac, device, waited):
+        light._CLIENTS[mac] = cube
+        return cube
+
+    entity = Light()
+    entity._connect = connect
+    frame, cmd_id = entity._build_frame()
+
+    light._LAST_DISCONNECT[MAC] = (light.monotonic() - 5, "idle")
+    await entity._write_once(MAC, frame, cmd_id, expect_ack=True)
+    assert order[0] == "subscribe", f"verification comes first here, got {order}"

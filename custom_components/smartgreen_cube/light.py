@@ -75,6 +75,14 @@ RETRY_BACKOFF = 0.4        # seconds to wait between attempts
 # a new session. Cheap next to the eleven seconds a doomed write costs.
 SUBSCRIPTION_BACKOFF = 2.0
 
+# After this much idle time the cube appears to go into a power-saving state:
+# measured failure rate of the notification subscription was 2/10 for gaps of
+# 7-17s but 4/7 for gaps of 99-1582s, and 0/4 immediately after a failure had
+# woken it. Past this point we deliver the command first and only then try to
+# subscribe, rather than spending the wake-up on a subscription that is more
+# likely than not to fail.
+WAKE_AFTER_IDLE = 60.0
+
 # Below this signal strength the link becomes unreliable: the connection often
 # still succeeds, but then drops during service discovery. Set at -80 rather
 # than -75: an installation measured at about -75 ran reliably, so warning
@@ -539,7 +547,17 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                 else:
                     client = await self._connect(mac, ble_device, waited)
                     fresh = True
-            if fresh:
+            # A GATT write with response is itself proof of delivery at the
+            # ATT layer — weaker than the cube's own acknowledgement, but it
+            # does confirm the frame arrived. On a cube that has been idle long
+            # enough to have dozed off, that is the better trade: get the
+            # command in first, then subscribe for the ones that follow.
+            entry = _LAST_DISCONNECT.get(mac)
+            dozed = entry is not None and monotonic() - entry[0] > WAKE_AFTER_IDLE
+            if fresh and dozed:
+                _LOGGER.debug("%s: idle for %s — sending before subscribing",
+                              self._attr_name, _since_disconnect(mac))
+            elif fresh:
                 outcome = await self._start_ack_listener(mac, client)
                 if outcome != "ok" and strict:
                     # Every connection whose subscription failed also had its
@@ -609,6 +627,11 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         finally:
             if waiter is not None:
                 _ACK_WAITERS.get(mac, {}).pop(cmd_id, None)
+
+        if fresh and not _ACK_ACTIVE.get(mac):
+            # The command is delivered; subscribing now costs nothing extra and
+            # lets the next command on this connection be verified properly.
+            await self._start_ack_listener(mac, client)
 
         _schedule_idle_disconnect(mac, self._idle_disconnect)
 
