@@ -75,9 +75,14 @@ Two things make that slow, and both are addressed:
 
   — usually seconds, occasionally a long tail. That shape is inherent to how
   BLE connects (see above): each attempt either lands or costs another round,
-  so a marginal link is fast most of the time and slow now and then. Only a
-  closer proxy shortens that tail. Raising the connection hold time under
-  *Configure* makes you pay for it less often, at the cost of cube battery.
+  so a marginal link is fast most of the time and slow now and then.
+
+  Moving the proxy is what removes the tail, and the improvement is worth more
+  than the decibels suggest. Repositioning one took the same setup from −89 dBm
+  to about −75 dBm — 14 dB, roughly twenty-five times the received power — and
+  the outliers stopped. Because a connection needs several hits in a row, a
+  better link compounds. Raising the connection hold time under *Configure*
+  only makes you pay for the tail less often; it does not shorten it.
 
   Be careful reading RSSI here: it is measured on advertisements that *arrived*.
   Through an obstacle the weak ones are lost and only the lucky ones are

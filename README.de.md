@@ -75,9 +75,15 @@ Zwei Dinge machen ihn langsam, beide sind adressiert:
 
   — meist Sekunden, gelegentlich ein langer Ausläufer. Diese Form folgt
   unmittelbar aus dem Verbindungsverfahren (siehe oben): Jeder Versuch trifft
-  oder kostet eine weitere Runde. Nur ein näherer Proxy verkürzt den Ausläufer.
-  Eine höhere Haltezeit unter *Konfigurieren* lässt dich seltener dafür zahlen
-  — zu Lasten des Cube-Akkus.
+  oder kostet eine weitere Runde.
+
+  Den Ausläufer beseitigt ein besser platzierter Proxy, und die Wirkung ist
+  größer, als die Dezibel vermuten lassen. Ein Umstellen brachte in derselben
+  Installation −89 dBm auf etwa −75 dBm — 14 dB, also rund die 25-fache
+  Empfangsleistung — und die Ausreißer blieben aus. Weil ein Verbindungsaufbau
+  mehrere Treffer in Folge braucht, wirkt sich ein besserer Link
+  überproportional aus. Eine höhere Haltezeit unter *Konfigurieren* lässt dich
+  nur seltener dafür zahlen; kürzer wird der Ausläufer dadurch nicht.
 
   Beim Lesen der Signalstärke Vorsicht: Sie wird an *angekommenen*
   Advertisements gemessen. Durch ein Hindernis gehen die schwachen verloren und
