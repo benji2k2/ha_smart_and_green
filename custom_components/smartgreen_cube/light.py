@@ -112,6 +112,13 @@ CONNECT_TIMEOUT = 45.0
 # loss on the failure path and buys nothing on the success path.
 NOTIFY_TIMEOUT = 2.0
 
+# When and why we last dropped each connection. The subscription fails
+# intermittently at any signal level, and the leading theory is that the cube
+# still considers the previous session open — BLE peers only give up on a link
+# after a supervision timeout. If failures cluster shortly after our own
+# disconnect, that is it; if they are spread evenly, it is not.
+_LAST_DISCONNECT: dict[str, tuple[float, str]] = {}
+
 _LOCKS: dict[str, asyncio.Lock] = {}
 # Pending acknowledgements: mac -> cmd_id -> future
 _ACK_WAITERS: dict[str, dict[int, asyncio.Future]] = {}
@@ -204,6 +211,7 @@ async def _release_other_clients(keep: str) -> None:
         _forget_connection(other)
         client = _CLIENTS.pop(other, None)
         if client is not None and client.is_connected:
+            _note_disconnect(other, "slot-freeing")
             _LOGGER.debug("Releasing connection to %s (switching to %s)", other, keep)
             try:
                 await client.disconnect()
@@ -224,12 +232,26 @@ def _schedule_idle_disconnect(mac: str, timeout: float) -> None:
         _forget_connection(mac)
         client = _CLIENTS.pop(mac, None)
         if client is not None and client.is_connected:
+            _note_disconnect(mac, "idle")
             try:
                 await client.disconnect()
             except Exception:  # noqa: BLE001
                 pass
 
     _IDLE_TASKS[mac] = asyncio.create_task(_close())
+
+
+def _note_disconnect(mac: str, reason: str) -> None:
+    _LAST_DISCONNECT[mac] = (monotonic(), reason)
+
+
+def _since_disconnect(mac: str) -> str:
+    """How long ago we dropped this connection, and why. For diagnosis."""
+    entry = _LAST_DISCONNECT.get(mac)
+    if entry is None:
+        return "no earlier session"
+    when, reason = entry
+    return f"{monotonic() - when:.1f}s after our own {reason} disconnect"
 
 
 def _forget_connection(mac: str) -> None:
@@ -263,6 +285,7 @@ async def _drop_client(mac: str, clear_cache: bool = False) -> None:
     client = _CLIENTS.pop(mac, None)
     if client is None:
         return
+    _note_disconnect(mac, "failure")
     if clear_cache and hasattr(client, "clear_cache"):
         try:
             await client.clear_cache()
@@ -620,13 +643,17 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
         except asyncio.TimeoutError:
             _ACK_ACTIVE[mac] = False
             _LOGGER.debug("%s: subscription timed out after %.0fs — "
-                          "reconnecting", self._attr_name, NOTIFY_TIMEOUT)
+                          "reconnecting (%s)", self._attr_name, NOTIFY_TIMEOUT,
+                          _since_disconnect(mac))
             return "timeout"
         except Exception as err:  # noqa: BLE001
             _ACK_ACTIVE[mac] = False
-            _LOGGER.debug("%s: subscription refused (%s)", self._attr_name, err)
+            _LOGGER.debug("%s: subscription refused (%s) (%s)",
+                          self._attr_name, err, _since_disconnect(mac))
             return f"refused: {err}"
         _ACK_ACTIVE[mac] = True
+        _LOGGER.debug("%s: subscribed (%s)", self._attr_name,
+                      _since_disconnect(mac))
         return "ok"
 
     def _log_link_quality(self, mac: str) -> None:
