@@ -100,6 +100,11 @@ What the integration does so it does not get in the way:
   commands do not pay for a new connection. Adjustable under *Configure* on the
   integration: longer means the next command is immediate, shorter lets the
   cube's radio sleep sooner. `0` disconnects right after each command.
+
+  For scale: the vendor app caps a connection at **20 seconds**
+  (`CONX_MAX_TIMER`), measured from opening rather than from the last command.
+  The default here is already six times more generous, so a shorter setting is
+  not unusual — it is closer to what the lamps see from the app.
 - LMP is a mesh, so **any** open connection can relay a command to **any** cube.
   If one cube is already connected, commands for the other go through it and
   skip the wait entirely — this is how the vendor app works too.
@@ -223,6 +228,14 @@ writes to characteristic `00005002-0000-1000-8000-00805f9b34fb` (service
 `41c15000-…`). The 16-byte payload is encrypted as
 `payload XOR AES128-ECB(keyCrypt1, nonce)`. The integration icon uses the motif
 from the original app.
+
+The connection sequence follows the vendor app: connect, discover services,
+subscribe, then write — with acknowledged writes (`with_response`) and without
+ever discarding the service cache, both of which the app also does. Where this
+integration goes further is in what happens when that sequence does not work:
+retries, relaying through whichever cube is already connected, and delivering
+the command before subscribing when a lamp has been idle long enough to doze
+off.
 
 ## Status
 
