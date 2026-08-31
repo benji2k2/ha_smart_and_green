@@ -106,11 +106,11 @@ _CONNECT_LOCK = asyncio.Lock()
 # Without this a doomed attempt blocked for 127s in the field.
 CONNECT_TIMEOUT = 45.0
 
-# Subscribing to notifications is only needed to verify acknowledgements. In
-# the field it hung for 16s and then failed, holding up the command behind it,
-# so it gets a short leash: without acknowledgements we still send, we just
-# cannot confirm.
-NOTIFY_TIMEOUT = 5.0
+# Subscribing to notifications either succeeds almost at once or not at all:
+# measured successes took 0.41s, 0.48s and 0.51s, while failures ran to
+# whatever limit was set. So the limit is short. Every second of it is pure
+# loss on the failure path and buys nothing on the success path.
+NOTIFY_TIMEOUT = 2.0
 
 _LOCKS: dict[str, asyncio.Lock] = {}
 # Pending acknowledgements: mac -> cmd_id -> future
@@ -619,9 +619,8 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                 client.start_notify(CHAR_UUID, _on_notify), NOTIFY_TIMEOUT)
         except asyncio.TimeoutError:
             _ACK_ACTIVE[mac] = False
-            _LOGGER.debug("%s: subscription timed out after %.0fs — sending "
-                          "unverified rather than reconnecting",
-                          self._attr_name, NOTIFY_TIMEOUT)
+            _LOGGER.debug("%s: subscription timed out after %.0fs — "
+                          "reconnecting", self._attr_name, NOTIFY_TIMEOUT)
             return "timeout"
         except Exception as err:  # noqa: BLE001
             _ACK_ACTIVE[mac] = False

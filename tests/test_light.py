@@ -655,6 +655,7 @@ async def test_slow_notify_does_not_hold_up_the_command():
     cannot confirm — so the subscription must not block the command.
     """
     reset_module_state()
+    _notify_limit = light.NOTIFY_TIMEOUT
     light.NOTIFY_TIMEOUT = 0.05
 
     class SlowNotify(FakeCube):
@@ -671,7 +672,7 @@ async def test_slow_notify_does_not_hold_up_the_command():
         assert outcome == "timeout"
         assert light._ACK_ACTIVE.get(MAC) is False
     finally:
-        light.NOTIFY_TIMEOUT = 5.0
+        light.NOTIFY_TIMEOUT = _notify_limit
 
 
 async def test_stale_cache_errors_are_recognised():
@@ -719,6 +720,7 @@ async def test_a_connection_whose_subscription_failed_is_not_written_to():
     authorization". Reconnecting instead is faster and usually works.
     """
     reset_module_state()
+    _notify_limit = light.NOTIFY_TIMEOUT
     light.NOTIFY_TIMEOUT = 0.05
 
     class Refuses(FakeCube):
@@ -750,7 +752,7 @@ async def test_a_connection_whose_subscription_failed_is_not_written_to():
     light._CLIENTS.clear()
     await entity._write_once(MAC, frame, cmd_id, expect_ack=False, strict=False)
     assert len(cube.writes) >= 1, "the last attempt must still send"
-    light.NOTIFY_TIMEOUT = 5.0
+    light.NOTIFY_TIMEOUT = _notify_limit
 
 
 async def test_subscription_result_is_reported():
@@ -770,11 +772,12 @@ async def test_subscription_result_is_reported():
         async def start_notify(self, uuid, callback):
             await asyncio.sleep(5)
 
+    _notify_limit = light.NOTIFY_TIMEOUT
     light.NOTIFY_TIMEOUT = 0.05
     try:
         assert await entity._start_ack_listener("CC", Slow(KEYSTREAM)) == "timeout"
     finally:
-        light.NOTIFY_TIMEOUT = 5.0
+        light.NOTIFY_TIMEOUT = _notify_limit
 
 
 async def test_a_slow_subscription_also_abandons_the_connection():
@@ -787,6 +790,7 @@ async def test_a_slow_subscription_also_abandons_the_connection():
     forces a rediscovery costing 30-45s.
     """
     reset_module_state()
+    _notify_limit = light.NOTIFY_TIMEOUT
     light.NOTIFY_TIMEOUT = 0.05
 
     class Slow(FakeCube):
@@ -811,7 +815,7 @@ async def test_a_slow_subscription_also_abandons_the_connection():
     else:
         raise AssertionError("a stalled subscription must abandon the link")
     finally:
-        light.NOTIFY_TIMEOUT = 5.0
+        light.NOTIFY_TIMEOUT = _notify_limit
 
 
 async def test_a_refusal_still_abandons_the_connection():
@@ -862,6 +866,7 @@ async def test_an_unverifiable_command_is_repeated_too():
     """
     reset_module_state()
     light.UNVERIFIED_REPEAT_GAP = 0.01
+    _notify_limit = light.NOTIFY_TIMEOUT
     light.NOTIFY_TIMEOUT = 0.05
 
     class Slow(FakeCube):
@@ -885,7 +890,7 @@ async def test_an_unverifiable_command_is_repeated_too():
         assert len(cube.writes) >= light.UNVERIFIED_REPEATS, \
             f"only {len(cube.writes)} writes for an unverifiable command"
     finally:
-        light.NOTIFY_TIMEOUT = 5.0
+        light.NOTIFY_TIMEOUT = _notify_limit
         light.UNVERIFIED_REPEAT_GAP = 0.2
 
 
@@ -899,3 +904,14 @@ async def test_a_verified_command_is_sent_once():
     frame, cmd_id = entity._build_frame()
     await entity._write_once(MAC, frame, cmd_id, expect_ack=True)
     assert len(cube.writes) == 1, f"{len(cube.writes)} writes despite an ack"
+
+
+async def test_the_subscription_limit_stays_short():
+    """It succeeds in under a second or not at all; waiting longer is pure loss.
+
+    Measured successes: 0.41s, 0.48s, 0.51s. Failures ran to whatever limit was
+    configured, so every second of limit is time lost on the failure path and
+    time not needed on the success path.
+    """
+    assert light.NOTIFY_TIMEOUT <= 2.0, (
+        "a longer limit only delays the reconnect that actually works")
