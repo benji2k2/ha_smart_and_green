@@ -113,6 +113,11 @@ CONNECT_TIMEOUT = 45.0
 # loss on the failure path and buys nothing on the success path.
 NOTIFY_TIMEOUT = 2.0
 
+# A write has no time limit of its own in bleak. In the field one hung for 16.1s
+# before failing with "Insufficient authorization", where successful writes take
+# about a second. Every one of those seconds is spent not retrying.
+WRITE_TIMEOUT = 5.0
+
 # When and why we last dropped each connection. The subscription fails
 # intermittently at any signal level, and the leading theory is that the cube
 # still considers the previous session open — BLE peers only give up on a link
@@ -574,7 +579,9 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                           "acknowledged" if acked else "unacknowledged")
 
         try:
-            await client.write_gatt_char(target, frame, response=acked)
+            await asyncio.wait_for(
+                client.write_gatt_char(target, frame, response=acked),
+                WRITE_TIMEOUT)
 
             # Repeat only when nothing at all confirms arrival. An
             # acknowledged GATT write already does — the device's ATT layer
@@ -587,9 +594,11 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                 for _ in range(UNVERIFIED_REPEATS - 1):
                     await asyncio.sleep(UNVERIFIED_REPEAT_GAP)
                     try:
-                        await client.write_gatt_char(target, frame,
-                                                     response=acked)
-                    except Exception:  # noqa: BLE001
+                        await asyncio.wait_for(
+                            client.write_gatt_char(target, frame,
+                                                   response=acked),
+                            WRITE_TIMEOUT)
+                    except (Exception, asyncio.TimeoutError):  # noqa: BLE001
                         break
 
             if waiter is not None:

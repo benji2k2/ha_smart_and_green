@@ -889,3 +889,31 @@ async def test_a_reused_connection_still_verifies():
     frame2, cmd_id2 = entity._build_frame()
     await entity._write_once(MAC, frame2, cmd_id2, expect_ack=True)
     assert order == ["write"], f"already subscribed, got {order}"
+
+
+async def test_a_hanging_write_is_cut_short():
+    """One write hung for 16.1s before failing; successful ones take about 1s.
+
+    Those seconds are spent not retrying, and the retry is what works.
+    """
+    assert light.WRITE_TIMEOUT <= 10, "a stuck write must not block the retry"
+
+    reset_module_state()
+    light.WRITE_TIMEOUT = 0.05
+
+    class Hangs(FakeCube):
+        async def write_gatt_char(self, char, frame, response=False):
+            await asyncio.sleep(10)
+
+    cube = Hangs(KEYSTREAM)
+    light._CLIENTS[MAC] = cube
+    entity = Light()
+    frame, cmd_id = entity._build_frame()
+    started = asyncio.get_event_loop().time()
+    try:
+        await entity._write_once(MAC, frame, cmd_id, expect_ack=False)
+    except (asyncio.TimeoutError, Exception):
+        pass
+    elapsed = asyncio.get_event_loop().time() - started
+    light.WRITE_TIMEOUT = 5.0
+    assert elapsed < 1.0, f"gave up only after {elapsed:.1f}s"
