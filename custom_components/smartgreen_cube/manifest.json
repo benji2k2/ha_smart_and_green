@@ -1,13 +1,13 @@
 {
   "domain": "smartgreen_cube",
   "name": "Smart & Green Cube",
-  "version": "0.10.1",
-  "config_flow": true,
-  "documentation": "https://github.com/benji2k2/ha_smart_and_green",
-  "issue_tracker": "https://github.com/benji2k2/ha_smart_and_green/issues",
+  "bluetooth": [{ "manufacturer_id": 1194 }],
   "codeowners": ["@benji2k2"],
-  "iot_class": "assumed_state",
+  "config_flow": true,
   "dependencies": ["bluetooth_adapters", "file_upload"],
+  "documentation": "https://github.com/benji2k2/ha_smart_and_green",
+  "iot_class": "assumed_state",
+  "issue_tracker": "https://github.com/benji2k2/ha_smart_and_green/issues",
   "requirements": ["bleak-retry-connector>=3.5.0"],
-  "bluetooth": [{ "manufacturer_id": 1194 }]
+  "version": "0.10.2"
 }
