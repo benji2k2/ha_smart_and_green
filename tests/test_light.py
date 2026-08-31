@@ -656,8 +656,7 @@ async def test_slow_notify_does_not_hold_up_the_command():
     cannot confirm — so the subscription must not block the command.
     """
     reset_module_state()
-    _notify_limit = light.NOTIFY_TIMEOUT
-    light.NOTIFY_TIMEOUT = 0.05
+    light.NOTIFY_LIMIT = light.AdaptiveLimit(floor=0.05, ceiling=0.05)
 
     class SlowNotify(FakeCube):
         async def start_notify(self, uuid, callback):
@@ -673,7 +672,7 @@ async def test_slow_notify_does_not_hold_up_the_command():
         assert outcome == "timeout"
         assert light._ACK_ACTIVE.get(MAC) is False
     finally:
-        light.NOTIFY_TIMEOUT = _notify_limit
+        light.NOTIFY_LIMIT = light.AdaptiveLimit(floor=1.0, ceiling=5.0)
 
 
 async def test_stale_cache_errors_are_recognised():
@@ -731,12 +730,11 @@ async def test_subscription_result_is_reported():
         async def start_notify(self, uuid, callback):
             await asyncio.sleep(5)
 
-    _notify_limit = light.NOTIFY_TIMEOUT
-    light.NOTIFY_TIMEOUT = 0.05
+    light.NOTIFY_LIMIT = light.AdaptiveLimit(floor=0.05, ceiling=0.05)
     try:
         assert await entity._start_ack_listener("CC", Slow(KEYSTREAM)) == "timeout"
     finally:
-        light.NOTIFY_TIMEOUT = _notify_limit
+        light.NOTIFY_LIMIT = light.AdaptiveLimit(floor=1.0, ceiling=5.0)
 
 
 async def test_a_timeout_never_discards_the_gatt_cache():
@@ -757,8 +755,7 @@ async def test_an_unacknowledged_write_is_repeated():
     """
     reset_module_state()
     light.UNVERIFIED_REPEAT_GAP = 0.01
-    _notify_limit = light.NOTIFY_TIMEOUT
-    light.NOTIFY_TIMEOUT = 0.05
+    light.NOTIFY_LIMIT = light.AdaptiveLimit(floor=0.05, ceiling=0.05)
 
     class NoAckWrites(FakeCube):
         """A characteristic that only offers write-without-response."""
@@ -790,7 +787,7 @@ async def test_an_unacknowledged_write_is_repeated():
         assert len(cube.writes) == light.UNVERIFIED_REPEATS, \
             f"{len(cube.writes)} writes where nothing confirms arrival"
     finally:
-        light.NOTIFY_TIMEOUT = _notify_limit
+        light.NOTIFY_LIMIT = light.AdaptiveLimit(floor=1.0, ceiling=5.0)
         light.UNVERIFIED_REPEAT_GAP = 0.2
 
 
@@ -805,19 +802,6 @@ async def test_a_verified_command_is_sent_once():
     await entity._write_once(MAC, frame, cmd_id, expect_ack=True)
     assert len(cube.writes) == 1, f"{len(cube.writes)} writes despite an ack"
 
-
-async def test_the_subscription_limit_stays_short():
-    """It succeeds in under a second or not at all; waiting longer is pure loss.
-
-    Measured successes: 0.41s, 0.48s, 0.51s. Failures ran to whatever limit was
-    configured, so every second of limit is time lost on the failure path and
-    time not needed on the success path.
-    """
-    assert light.NOTIFY_TIMEOUT <= 2.0, (
-        "a longer limit only delays the reconnect that actually works")
-
-
-# ----------------------------------------------------- waking a dozing cube
 
 async def test_a_fresh_connection_gets_the_command_before_the_subscription():
     """Subscribing first fails between 20% and 80% of the time, costing ~9s.
@@ -898,10 +882,10 @@ async def test_a_hanging_write_is_cut_short():
     second of limit beyond that is spent not retrying, and the retry is what
     works.
     """
-    assert light.WRITE_TIMEOUT <= 3, "a stuck write must not block the retry"
+    assert light.WRITE_LIMIT.seconds <= 5, "a stuck write must not block the retry"
 
     reset_module_state()
-    light.WRITE_TIMEOUT = 0.05
+    light.WRITE_LIMIT = light.AdaptiveLimit(floor=0.05, ceiling=0.05)
 
     class Hangs(FakeCube):
         async def write_gatt_char(self, char, frame, response=False):
@@ -917,5 +901,44 @@ async def test_a_hanging_write_is_cut_short():
     except (asyncio.TimeoutError, Exception):
         pass
     elapsed = asyncio.get_event_loop().time() - started
-    light.WRITE_TIMEOUT = 2.5
+    light.WRITE_LIMIT = light.AdaptiveLimit(floor=1.0, ceiling=5.0)
     assert elapsed < 1.0, f"gave up only after {elapsed:.1f}s"
+
+
+# --------------------------------------------------------- self-tuning limits
+
+async def test_a_limit_starts_generous_and_tightens_with_evidence():
+    """Values tuned against one installation are wrong on the next one.
+
+    So the limit is learned: generous until this installation has shown what it
+    can do, then a multiple of its slowest recent success.
+    """
+    limit = light.AdaptiveLimit(floor=1.0, ceiling=5.0, factor=4.0)
+    assert limit.seconds == 5.0, "no evidence yet — stay generous"
+
+    limit.record(0.5)
+    assert limit.seconds == 2.0, "4x the slowest success"
+
+    limit.record(0.2)
+    assert limit.seconds == 2.0, "the slowest still governs"
+
+
+async def test_a_limit_never_leaves_its_bounds():
+    """A very fast link must not tighten the limit into false failures, and a
+    very slow one must not push it back to where a hang costs half a minute."""
+    limit = light.AdaptiveLimit(floor=1.0, ceiling=5.0, factor=4.0)
+    limit.record(0.01)
+    assert limit.seconds == 1.0, "floor protects against over-tightening"
+
+    limit.record(30.0)
+    assert limit.seconds == 5.0, "ceiling caps the damage of one slow sample"
+
+
+async def test_a_limit_forgets_old_samples():
+    """A link that has recovered should not stay slow forever."""
+    limit = light.AdaptiveLimit(floor=0.1, ceiling=5.0, factor=2.0, window=3)
+    limit.record(2.0)
+    assert limit.seconds == 4.0
+    for _ in range(3):
+        limit.record(0.2)
+    assert limit.seconds == 0.4, "the slow sample has aged out"

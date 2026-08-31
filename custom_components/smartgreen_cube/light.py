@@ -107,18 +107,46 @@ _CONNECT_LOCK = asyncio.Lock()
 # Without this a doomed attempt blocked for 127s in the field.
 CONNECT_TIMEOUT = 45.0
 
-# Subscribing to notifications either succeeds almost at once or not at all:
-# measured successes took 0.41s, 0.48s and 0.51s, while failures ran to
-# whatever limit was set. So the limit is short. Every second of it is pure
-# loss on the failure path and buys nothing on the success path.
-NOTIFY_TIMEOUT = 2.0
+class AdaptiveLimit:
+    """A time limit learned from what this installation actually achieves.
 
-# A write has no time limit of its own in bleak, and in the field one hung for
-# 16.1s before failing. Successful writes are far quicker: measured together
-# with the subscription that follows them, 0.32-0.76s. The limit is set at
-# roughly three times the slowest of those, because every second beyond it is
-# spent not retrying — and the retry is what works.
-WRITE_TIMEOUT = 2.5
+    Both writes and subscriptions here either complete quickly or not at all,
+    so a tight limit turns a doomed operation into a fast retry, which is what
+    works. But how quick "quickly" is depends on the link, the proxy and how
+    busy both are — values tuned against one installation would be too tight
+    somewhere else and cause needless reconnects.
+
+    So the limit starts generous and tightens as successes are observed: a
+    multiple of the slowest recent success, never below ``floor`` and never
+    above ``ceiling``. With no observations yet it stays at ``ceiling``, which
+    is the safe direction to be wrong in.
+    """
+
+    def __init__(self, floor: float, ceiling: float, factor: float = 4.0,
+                 window: int = 20) -> None:
+        self._floor = floor
+        self._ceiling = ceiling
+        self._factor = factor
+        self._window = window
+        self._samples: list[float] = []
+
+    @property
+    def seconds(self) -> float:
+        if not self._samples:
+            return self._ceiling
+        return min(self._ceiling,
+                   max(self._floor, self._factor * max(self._samples)))
+
+    def record(self, seconds: float) -> None:
+        self._samples.append(seconds)
+        del self._samples[:-self._window]
+
+
+# Observed on a healthy link: subscriptions 0.07-0.61s, writes together with
+# the subscription that follows 0.32-0.76s. The ceilings are what a fresh
+# installation uses until it has measured itself.
+NOTIFY_LIMIT = AdaptiveLimit(floor=1.0, ceiling=5.0)
+WRITE_LIMIT = AdaptiveLimit(floor=1.0, ceiling=5.0)
 
 # When and why we last dropped each connection. The subscription fails
 # intermittently at any signal level, and the leading theory is that the cube
@@ -581,9 +609,11 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                           "acknowledged" if acked else "unacknowledged")
 
         try:
+            write_started = monotonic()
             await asyncio.wait_for(
                 client.write_gatt_char(target, frame, response=acked),
-                WRITE_TIMEOUT)
+                WRITE_LIMIT.seconds)
+            WRITE_LIMIT.record(monotonic() - write_started)
 
             # Repeat only when nothing at all confirms arrival. An
             # acknowledged GATT write already does — the device's ATT layer
@@ -599,7 +629,7 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                         await asyncio.wait_for(
                             client.write_gatt_char(target, frame,
                                                    response=acked),
-                            WRITE_TIMEOUT)
+                            WRITE_LIMIT.seconds)
                     except (Exception, asyncio.TimeoutError):  # noqa: BLE001
                         break
 
@@ -652,13 +682,15 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
             if waiter is not None and not waiter.done():
                 waiter.set_result(code)
 
+        limit = NOTIFY_LIMIT.seconds
+        started = monotonic()
         try:
             await asyncio.wait_for(
-                client.start_notify(CHAR_UUID, _on_notify), NOTIFY_TIMEOUT)
+                client.start_notify(CHAR_UUID, _on_notify), limit)
         except asyncio.TimeoutError:
             _ACK_ACTIVE[mac] = False
-            _LOGGER.debug("%s: subscription timed out after %.0fs — "
-                          "reconnecting (%s)", self._attr_name, NOTIFY_TIMEOUT,
+            _LOGGER.debug("%s: subscription timed out after %.1fs — "
+                          "reconnecting (%s)", self._attr_name, limit,
                           _since_disconnect(mac))
             return "timeout"
         except Exception as err:  # noqa: BLE001
@@ -667,6 +699,7 @@ class SmartGreenCubeLight(LightEntity, RestoreEntity):
                           self._attr_name, err, _since_disconnect(mac))
             return f"refused: {err}"
         _ACK_ACTIVE[mac] = True
+        NOTIFY_LIMIT.record(monotonic() - started)
         _LOGGER.debug("%s: subscribed (%s)", self._attr_name,
                       _since_disconnect(mac))
         return "ok"

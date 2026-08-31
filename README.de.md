@@ -271,6 +271,21 @@ Einordnung: Es handelt sich um ein **lokales BLE-Steuergeheimnis** – missbrauc
 nur in Funkreichweite bzw. über dein Proxy-Netz, nicht als Cloud-Zugang. Derselbe
 Schlüssel liegt ohnehin bereits im App-Export, auf dem Smartphone und in den Cubes.
 
+### Zeitwerte
+
+Die beiden Einstellungen unter *Konfigurieren* sind echte Abwägungen: Akku
+gegen Reaktionszeit, und Flüssigkeit gegen das Anzeigen nur bestätigter
+Zustände. Die internen Zeitlimits sind das nicht und werden bewusst nicht
+angeboten — für sie gibt es eine richtige Antwort, abgeleitet aus dem Verhalten
+der Hardware, und die zu erraten sollte nicht Aufgabe des Nutzers sein.
+
+Diese Limits stammen auch nicht fest aus den Messungen einer einzelnen
+Installation, wo sie auf einem schwächeren Link zu knapp wären und unnötige
+Neuversuche auslösen würden. Sie starten großzügig und ziehen sich an, sobald
+Erfolge beobachtet wurden — stets ein Vielfaches des langsamsten der letzten.
+Eine langsamere Umgebung als die, gegen die entwickelt wurde, landet von selbst
+bei einem längeren Limit.
+
 ## Tests
 
 ```bash

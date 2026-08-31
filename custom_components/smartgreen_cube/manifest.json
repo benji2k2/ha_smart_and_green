@@ -9,5 +9,5 @@
   "iot_class": "assumed_state",
   "issue_tracker": "https://github.com/benji2k2/ha_smart_and_green/issues",
   "requirements": ["bleak-retry-connector>=3.5.0"],
-  "version": "0.12.2"
+  "version": "0.13.0"
 }

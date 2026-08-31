@@ -272,6 +272,20 @@ For perspective: this is a **local BLE control secret**. It can only be abused
 within radio range or through your proxy network, and it is not cloud access.
 The same key already exists in the app export, on the phone, and in the cubes.
 
+### Timing values
+
+The two settings under *Configure* are genuine preferences: battery against
+latency, and responsiveness against showing only confirmed state. The
+integration's internal time limits are not, and are deliberately not exposed —
+there is a right answer for them, derived from what the hardware does, and
+guessing it should not be the user's job.
+
+Those limits are also not hardcoded from one installation's measurements, which
+would be too tight on a weaker link and cause needless reconnects. They start
+generous and tighten as successes are observed, staying a multiple of the
+slowest recent one. A setup that is slower than the one this was developed
+against will settle on a longer limit by itself.
+
 ## Tests
 
 ```bash
