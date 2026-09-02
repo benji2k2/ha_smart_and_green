@@ -2,6 +2,8 @@
 
 The expected byte sequences here are not invented — they were captured from a
 real cube during development and are known to make the lamp do the right thing.
+Their payloads have been re-encrypted under a test key, so the structure is
+genuine while the secret is not anyone's.
 """
 from __future__ import annotations
 
@@ -10,9 +12,15 @@ import conftest
 sg = conftest.load()
 lmp = sg.lmp
 
-# A key/nonce pair with no relation to any real installation.
+# Key/nonce pairs for the tests. Neither belongs to a real installation: the
+# captured frames below were recorded from a device, then decrypted and
+# re-encrypted under CAPTURE_KEY, so they still exercise the real protocol
+# structure — header layout, checksums, TLV parsing — without carrying anyone's
+# mesh secret into a public repository.
 KEY = bytes(range(16))
 NONCE = bytes(range(16, 32))
+CAPTURE_KEY = bytes(range(0x10, 0x20))
+CAPTURE_NONCE = bytes(range(0x20, 0x30))
 
 
 def test_frame_layout():
@@ -77,13 +85,12 @@ def test_brightness_scales_the_value_byte():
 
 def test_parse_ack_reads_real_captures():
     """Acknowledgements captured from the device decode to the right codes."""
-    key = bytes.fromhex("6c68b73c2de5f66b29b4fcb48fc8165c")
-    nonce = bytes.fromhex("e1409c25282f0ae5f30b43fbb92357e2")
+    key, nonce = CAPTURE_KEY, CAPTURE_NONCE
     captures = {
-        "50 01 00 00 34 DA 92 17 58 7D 0F 3C C9 5F 31 0E 6B EB E9 8F": (1, 0),
-        "50 02 00 00 34 DA 92 17 58 7D 0F 3C C9 5F 31 0E 6B EB E9 8F": (2, 0),
-        "50 01 00 00 35 DA 92 16 58 7D 0F 3C C9 5F 31 0E 6B EB E9 8F": (1, 1),
-        "50 05 00 00 37 DA 92 14 58 7D 0F 3C C9 5F 31 0E 6B EB E9 8F": (5, 3),
+        "50010000ae1f557e627ed322542e3355c3b86864": (1, 0),
+        "50020000ae1f557e627ed322542e3355c3b86864": (2, 0),
+        "50010000af1f557f627ed322542e3355c3b86864": (1, 1),
+        "50050000ad1f557d627ed322542e3355c3b86864": (5, 3),
     }
     for raw, expected in captures.items():
         assert lmp.parse_ack(bytes.fromhex(raw.replace(" ", "")), key, nonce) == expected
@@ -94,22 +101,20 @@ def test_parse_ack_reads_real_captures():
 
 
 def test_parse_ack_rejects_non_acknowledgements():
-    key = bytes.fromhex("6c68b73c2de5f66b29b4fcb48fc8165c")
-    nonce = bytes.fromhex("e1409c25282f0ae5f30b43fbb92357e2")
+    key, nonce = CAPTURE_KEY, CAPTURE_NONCE
     assert lmp.parse_ack(b"\x00" * 5, key, nonce) is None, "too short"
     assert lmp.parse_ack(b"\x00" * 20, key, nonce) is None, "checksum mismatch"
     # A status frame is not an acknowledgement.
-    status = "70 00 00 00 1A D6 83 16 58 11 F1 8F 5F C7 A6 85 94 14 16 71"
+    status = "700000008013447f62122d91c2b6a4de3c47979a"
     assert lmp.parse_ack(bytes.fromhex(status.replace(" ", "")), key, nonce) is None
 
 
 def test_decode_advertisement_against_real_captures():
     """Advertisements recorded from both cubes decode with a valid checksum."""
-    key = bytes.fromhex("6c68b73c2de5f66b29b4fcb48fc8165c")
-    nonce = bytes.fromhex("e1409c25282f0ae5f30b43fbb92357e2")
+    key, nonce = CAPTURE_KEY, CAPTURE_NONCE
 
     small = lmp.decode_advertisement(
-        bytes.fromhex("71b84013ffffd80084d390574b1ddcadf8a0c8f19614e98f"), key, nonce)
+        bytes.fromhex("71b84013ffffd8001e16573e711e00b365d1caaa3e476864"), key, nonce)
     assert small["src"] == "13:40"
     assert small["registered"] is True
     assert small["connected"] is False
@@ -117,20 +122,19 @@ def test_decode_advertisement_against_real_captures():
 
     # Same cube while connected: only the status bit differs.
     connected = lmp.decode_advertisement(
-        bytes.fromhex("71b94013ffffe00084d390574b1ddcadf8a0c8f19614e98f"), key, nonce)
+        bytes.fromhex("71b94013ffffe0001e16573e711e00b365d1caaa3e476864"), key, nonce)
     assert connected["connected"] is True
 
     large = lmp.decode_advertisement(
-        bytes.fromhex("71b8e041ffffa300bdd390f719343efdcda0adf19614e98f"), key, nonce)
+        bytes.fromhex("71b8e041ffffa3002716579e2337e2e350d1afaa3e476864"), key, nonce)
     assert large["src"] == "41:E0"
 
 
 def test_decode_advertisement_rejects_bad_input():
-    key = bytes.fromhex("6c68b73c2de5f66b29b4fcb48fc8165c")
-    nonce = bytes.fromhex("e1409c25282f0ae5f30b43fbb92357e2")
+    key, nonce = CAPTURE_KEY, CAPTURE_NONCE
     assert lmp.decode_advertisement(b"\x00" * 10, key, nonce) is None, "too short"
 
     corrupt = bytearray(
-        bytes.fromhex("71b84013ffffd80084d390574b1ddcadf8a0c8f19614e98f"))
+        bytes.fromhex("71b84013ffffd8001e16573e711e00b365d1caaa3e476864"))
     corrupt[9] ^= 0xFF
     assert lmp.decode_advertisement(bytes(corrupt), key, nonce) is None, "checksum"
