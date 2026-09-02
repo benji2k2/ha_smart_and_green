@@ -2,8 +2,8 @@
 
 The expected byte sequences here are not invented — they were captured from a
 real cube during development and are known to make the lamp do the right thing.
-Their payloads have been re-encrypted under a test key, so the structure is
-genuine while the secret is not anyone's.
+Their payloads are re-encrypted under a synthetic test key, so the structure is
+genuine while the key material is test data.
 """
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ import conftest
 sg = conftest.load()
 lmp = sg.lmp
 
-# Key/nonce pairs for the tests. Neither belongs to a real installation: the
-# captured frames below were recorded from a device, then decrypted and
-# re-encrypted under CAPTURE_KEY, so they still exercise the real protocol
-# structure — header layout, checksums, TLV parsing — without carrying anyone's
-# mesh secret into a public repository.
+# Key/nonce pairs for the tests, both synthetic. The captured frames below were
+# recorded from a device and then re-encrypted under CAPTURE_KEY, so they still
+# exercise the real protocol structure — header layout, checksums, TLV parsing
+# — while the key material stays test data. Mesh keys belong in nobody's
+# repository, so fixtures never carry a real one.
 KEY = bytes(range(16))
 NONCE = bytes(range(16, 32))
 CAPTURE_KEY = bytes(range(0x10, 0x20))
