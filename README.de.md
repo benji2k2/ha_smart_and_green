@@ -199,6 +199,41 @@ Tiefschlaf ist absichtlich **kein** Schalter. Die App schaltet ihn nur ein, und
 ein Cube im Tiefschlaf erwacht ausschließlich durch einen Tastendruck am Gerät
 — eine fehlgeleitete Automatisierung würde die Lampe unerreichbar machen.
 
+## Akkuverbrauch im ausgeschalteten Zustand
+
+Ein ausgeschalteter Cube ruht **nicht**. Er bleibt Mesh-Knoten und hört auf
+Befehle, und das allein leert den Akku — egal ob Home Assistant, die App oder
+gar niemand mit ihm spricht. Der Hersteller sagt das selbst:
+
+- Die FAQ des deutschen Vertriebs (Überwintern) nennt, dass der
+  Bluetooth-Empfänger den Akku **innerhalb von 6–8 Tagen** komplett entleert,
+  und rät, ihn bei längerer Pause in der App zu deaktivieren und einmal im Monat
+  zu laden.
+- Die offizielle Mesh-Anleitung (französisch, *Mise en veille prolongée*)
+  weist darauf hin, dass die Geräte auch unbeleuchtet Akku verbrauchen, und
+  empfiehlt für lange Pausen den Tiefschlaf.
+
+Eine Standby-Angabe speziell für den Cube gibt es nicht, und die Akkugröße
+unterscheidet sich je Modell — rechne mit Tagen bis wenigen Wochen, nicht mit
+Monaten.
+
+**Der Anteil der Integration ist klein.** Die Diagnose-Sensoren lesen nur
+Advertisements, die Home Assistant ohnehin empfangen hat; sie senden nie etwas
+an den Cube. Funkzeit entsteht nur beim Schalten, plus die eingestellte
+Haltezeit danach (0 minimiert das). In einer Installation zeigte ein
+zehntägiger Verlauf in 3 von rund 23.000 Messpunkten eine offene Verbindung, und
+die Lampe war trotzdem nach weniger als drei Wochen fast ohne Nutzung leer — der
+Verbrauch ist der der Lampe selbst.
+
+Soll der Cube aus Home Assistant schaltbar bleiben, gibt es praktisch diese
+Wege:
+
+1. **Auf der Ladestation lassen.**
+2. **Regelmäßig nachladen.** Bleibt *Zuletzt gesehen* stehen, sendet der Cube
+   nicht mehr — das verlässlichste Zeichen für einen leeren Akku.
+3. **Tiefschlaf** in der App für lange Pausen. Ein schlafender Cube ist aus
+   Home Assistant nicht erreichbar, bis jemand eine Taste am Gerät drückt.
+
 ## Voraussetzungen
 
 - Home Assistant **2024.4+** mit aktiver **Bluetooth**-Integration

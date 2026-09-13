@@ -191,6 +191,40 @@ Deep sleep is deliberately not exposed as a switch. The app only ever *enables*
 it, and a cube in deep sleep wakes solely on a physical button press — a stray
 automation would strand the lamp.
 
+## Battery drain while off
+
+A cube that is switched off is **not** idle. It stays a mesh node, listening
+for commands, and that alone empties the battery — no matter whether Home
+Assistant, the app, or nothing at all is talking to it. The vendor says so
+itself:
+
+- The German distributor's FAQ (winter storage) states that the Bluetooth
+  receiver drains the battery completely **within 6–8 days**, and advises
+  disabling it in the app and charging once a month during long breaks.
+- The official mesh user guide (French, *Mise en veille prolongée*) notes that
+  the devices use battery even when not lit, and recommends deep sleep for long
+  periods of non-use.
+
+Neither gives a standby figure for the Cube specifically, and battery size
+differs between models, so expect days to a few weeks — not months.
+
+**What the integration adds is small.** The diagnostic sensors only read
+advertisements Home Assistant has already received; they never transmit to the
+cube. Radio time is spent only when you switch, plus the configured hold time
+afterwards (set it to 0 to minimise this). In one installation, ten days of
+history showed the cube reporting an open connection in 3 of about 23,000
+samples, and the lamp still ran flat after less than three weeks of almost no
+use — the drain is the lamp's own.
+
+If the cube must stay controllable from Home Assistant, the practical options
+are:
+
+1. **Leave it on its charging base.**
+2. **Recharge regularly.** When *Last seen* stops updating, the cube has stopped
+   advertising — the most reliable sign that the battery is empty.
+3. **Deep sleep** for long breaks, via the app. A sleeping cube cannot be
+   reached from Home Assistant until someone presses a button on it.
+
 ## Requirements
 
 - Home Assistant **2024.4+** with the **Bluetooth** integration enabled
