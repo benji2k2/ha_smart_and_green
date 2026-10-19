@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img alt="HACS Custom" src="https://img.shields.io/badge/HACS-Custom-41BDF5.svg">
+  <img alt="HACS Default" src="https://img.shields.io/badge/HACS-Default-41BDF5.svg">
   <img alt="Home Assistant 2024.4+" src="https://img.shields.io/badge/Home%20Assistant-2024.4%2B-41BDF5.svg">
   <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg">
 </p>
@@ -243,11 +243,14 @@ Wege:
 
 ## Installation
 
-**Über HACS (Custom Repository):**
+**Über HACS:** Die Integration ist in der HACS-Standardliste.
 
-1. HACS → Integrationen → ⋮ → *Benutzerdefinierte Repositories*
-2. `https://github.com/benji2k2/ha_smart_and_green` als Kategorie **Integration** hinzufügen
-3. „Smart & Green Cube" installieren → Home Assistant neu starten
+1. In HACS nach **„Smart & Green Cube“** suchen → *Herunterladen*
+2. Home Assistant neu starten
+
+Noch nicht zu finden (neue Einträge erscheinen mit etwas Verzögerung)? Dann als benutzerdefiniertes Repository
+hinzufügen: HACS → ⋮ → *Benutzerdefinierte Repositories* → `https://github.com/benji2k2/ha_smart_and_green`,
+Kategorie **Integration**.
 
 **Manuell:** Ordner `custom_components/smartgreen_cube/` nach
 `<config>/custom_components/` kopieren und HA neu starten.
