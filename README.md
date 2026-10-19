@@ -11,7 +11,7 @@
 
 <p align="center">
   <img alt="HACS Custom" src="https://img.shields.io/badge/HACS-Custom-41BDF5.svg">
-  <img alt="Home Assistant 2024.4+" src="https://img.shields.io/badge/Home%20Assistant-2024.4%2B-41BDF5.svg">
+  <img alt="Home Assistant 2024.11+" src="https://img.shields.io/badge/Home%20Assistant-2024.11%2B-41BDF5.svg">
   <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg">
 </p>
 
@@ -227,7 +227,7 @@ are:
 
 ## Requirements
 
-- Home Assistant **2024.4+** with the **Bluetooth** integration enabled
+- Home Assistant **2024.11+** with the **Bluetooth** integration enabled
 - A Bluetooth adapter on the HA host **or** an ESPHome device with
   `bluetooth_proxy` (active connections) within range of the cubes
 - Cubes in PRIVATE key mode (the app's default)
