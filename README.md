@@ -234,16 +234,24 @@ are:
 
 ## Installation
 
-**Via HACS:** the integration is in the HACS default list.
+### Marketplace (Home Assistant 2026.11 and newer)
 
-1. HACS → search for **"Smart & Green Cube"** → *Download*
-2. Restart Home Assistant
+1. **Settings → Marketplace** → search for **Smart & Green Cube** → **Install**.
+2. Restart Home Assistant if the Marketplace asks for it.
 
-Not found yet (new listings can take a while to appear)? Add it as a custom repository instead:
-HACS → ⋮ → *Custom repositories* → `https://github.com/benji2k2/ha_smart_and_green`, category **Integration**.
+### HACS (2024.11 to 2026.10)
 
-**Manually:** copy the `custom_components/smartgreen_cube/` folder into
-`<config>/custom_components/` and restart Home Assistant.
+1. HACS → search for **Smart & Green Cube** → **Download**.
+2. Restart Home Assistant.
+
+Not found? Add the repository by hand and continue with step 1: in the Marketplace with
+**Add from link**, in HACS under ⋮ → **Custom repositories** (type **Integration**), each with
+`https://github.com/benji2k2/ha_smart_and_green`.
+
+### Manually
+
+Copy `custom_components/smartgreen_cube` into `/config/custom_components/` and
+restart Home Assistant.
 
 ## Setup
 

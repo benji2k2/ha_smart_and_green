@@ -11,7 +11,7 @@
 
 <p align="center">
   <img alt="HACS Default" src="https://img.shields.io/badge/HACS-Default-41BDF5.svg">
-  <img alt="Home Assistant 2024.4+" src="https://img.shields.io/badge/Home%20Assistant-2024.4%2B-41BDF5.svg">
+  <img alt="Home Assistant 2024.11+" src="https://img.shields.io/badge/Home%20Assistant-2024.11%2B-41BDF5.svg">
   <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg">
 </p>
 
@@ -236,24 +236,31 @@ Wege:
 
 ## Voraussetzungen
 
-- Home Assistant **2024.4+** mit aktiver **Bluetooth**-Integration
+- Home Assistant **2024.11+** mit aktiver **Bluetooth**-Integration
 - Bluetooth-Adapter am HA-Host **oder** ein ESPHome-Gerät mit
   `bluetooth_proxy` (aktive Verbindungen) in Reichweite der Cubes
 - Cubes im PRIVATE-Key-Modus (Standard der App)
 
 ## Installation
 
-**Über HACS:** Die Integration ist in der HACS-Standardliste.
+### Marketplace (Home Assistant 2026.11 und neuer)
 
-1. In HACS nach **„Smart & Green Cube“** suchen → *Herunterladen*
-2. Home Assistant neu starten
+1. **Einstellungen → Marketplace** → nach **Smart & Green Cube** suchen → **Installieren**.
+2. Home Assistant neu starten, falls der Marketplace danach fragt.
 
-Noch nicht zu finden (neue Einträge erscheinen mit etwas Verzögerung)? Dann als benutzerdefiniertes Repository
-hinzufügen: HACS → ⋮ → *Benutzerdefinierte Repositories* → `https://github.com/benji2k2/ha_smart_and_green`,
-Kategorie **Integration**.
+### HACS (2024.11 bis 2026.10)
 
-**Manuell:** Ordner `custom_components/smartgreen_cube/` nach
-`<config>/custom_components/` kopieren und HA neu starten.
+1. HACS → nach **Smart & Green Cube** suchen → **Herunterladen**.
+2. Home Assistant neu starten.
+
+Nicht gefunden? Dann das Repository von Hand hinzufügen und mit Schritt 1 weitermachen: im
+Marketplace über **Über Link hinzufügen**, in HACS unter ⋮ → **Benutzerdefinierte Repositories**
+(Typ **Integration**), jeweils mit `https://github.com/benji2k2/ha_smart_and_green`.
+
+### Von Hand
+
+`custom_components/smartgreen_cube` nach `/config/custom_components/` kopieren und
+Home Assistant neu starten.
 
 ## Einrichtung
 
